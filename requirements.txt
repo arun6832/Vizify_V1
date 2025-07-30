@@ -4,3 +4,5 @@ seaborn
 matplotlib
 missingno
 wordcloud
+transformers
+ipywidgets
