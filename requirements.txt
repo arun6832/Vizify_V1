@@ -6,3 +6,9 @@ missingno
 wordcloud
 transformers
 ipywidgets
+streamlit
+plotly
+streamlit-aggrid
+streamlit-plotly-events
+kaleido
+reportlab

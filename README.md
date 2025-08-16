@@ -1,7 +1,7 @@
 # Vizify
 
 ## Overview
-**Vizify** is a Python package designed to automate the process of data visualization and analysis. It generates a comprehensive PDF report containing a wide variety of plots and visual summaries, helping users quickly explore both numerical and categorical data.
+**Vizify** is a Python package designed to automate the process of data visualization and analysis. It generates a comprehensive PDF report containing a wide variety of plots and visual summaries, while also providing an interactive Streamlit dashboard for live data exploration.
 
 Whether you're a data scientist, analyst, or beginner, Vizify speeds up exploratory data analysis and makes your datasets visually insightful with minimal effort.
 
@@ -24,6 +24,8 @@ Whether you're a data scientist, analyst, or beginner, Vizify speeds up explorat
 - **Anomaly Detection:** Detects and visualizes unusual patterns or outliers in time-series data.
 - **Automated PDF Generation:** Saves all visualizations in a structured PDF report.
 - **AI-Powered Chart Insights:** Uses Gemini LLM to automatically interpret charts and provide natural-language explanations.
+- **Interactive Dashboard (NEW):** Explore visualizations dynamically with Streamlit.
+- **Download Dashboard as PDF (NEW):** Export the live dashboard view as a PDF
 
 ---
 
@@ -91,6 +93,12 @@ Vizify requires the following Python libraries:
 - [matplotlib](https://pypi.org/project/matplotlib/)
 - [missingno](https://pypi.org/project/missingno/)
 - [wordcloud](https://pypi.org/project/wordcloud/)
+- ipywidgets
+- streamlit
+- plotly
+- st_aggrid
+- streamlit_plotly_events
+- kaleido
 
 These will be automatically installed when you install Vizify.
 
@@ -98,8 +106,6 @@ These will be automatically installed when you install Vizify.
 
 ## 📈 Upcoming Features
 
-- **Interactive HTML Export:** Export the report as a rich, browser-based dashboard.
-- **AI-Powered Graph Insights:** Use open-source LLMs to automatically interpret charts.
 - **Custom Theme Support:** Dark/light mode and aesthetic customizations.
 - **Drill-Down Interactivity:** Clickable charts for deeper data exploration.
 
