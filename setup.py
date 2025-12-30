@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="vizify",
-    version="0.1.7",
+    version="0.2.0",
     author="Arun M",
     author_email="arunpappulli@gmail.com",
     description="An automated data visualization package",

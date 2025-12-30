@@ -4,11 +4,14 @@ seaborn
 matplotlib
 missingno
 wordcloud
-transformers
-ipywidgets
 streamlit
 plotly
+google-genai
+scikit-learn
+reportlab
+fpdf2
 streamlit-aggrid
 streamlit-plotly-events
 kaleido
-reportlab
+ipywidgets
+jupyter
