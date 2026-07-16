@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="vizify",
-    version="0.2.0",
+    version="0.5.0",
     author="Arun M",
     author_email="arunpappulli@gmail.com",
     description="An automated data visualization package",
@@ -16,8 +16,13 @@ setup(
         "seaborn",
         "matplotlib",
         "missingno",
-        "wordcloud"
+        "wordcloud",
+        "flask"
     ],
+    include_package_data=True,
+    package_data={
+        "vizify": ["static/*", "static/assets/*"]
+    },
     license="MIT",
     classifiers=[
         "Programming Language :: Python :: 3",
