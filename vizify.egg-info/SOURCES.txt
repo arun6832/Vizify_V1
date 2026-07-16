@@ -3,9 +3,16 @@ MANIFEST.in
 README.md
 setup.py
 vizify/__init__.py
+vizify/dashboard.py
 vizify/vizify.py
 vizify.egg-info/PKG-INFO
 vizify.egg-info/SOURCES.txt
 vizify.egg-info/dependency_links.txt
 vizify.egg-info/requires.txt
 vizify.egg-info/top_level.txt
+vizify/static/index.html
+vizify/static/vite.svg
+vizify/static/assets/index-BfrsgHvf.js
+vizify/static/assets/index-BiZ-IHqf.js
+vizify/static/assets/index-BuxzDFRX.js
+vizify/static/assets/index-Ca92r-_P.css

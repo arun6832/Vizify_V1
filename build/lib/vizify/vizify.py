@@ -10,7 +10,6 @@ import time
 from itertools import combinations
 import sys
 import subprocess
-import streamlit as st
 import json
 import io
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image
@@ -27,6 +26,8 @@ try:
     from fpdf import FPDF
     PDF_LIBS_AVAILABLE = True
 except ImportError:
+    class FPDF:
+        pass
     PDF_LIBS_AVAILABLE = False
 
 # Optional dependencies
@@ -35,6 +36,7 @@ try:
     import plotly.express as px
     STREAMLIT_AVAILABLE = True
 except Exception:
+    st = None
     STREAMLIT_AVAILABLE = False
 
 try:
@@ -67,8 +69,9 @@ except ImportError:
 
 # --- ML Imports ---
 try:
-    from sklearn.model_selection import train_test_split
+    from sklearn.model_selection import train_test_split, GridSearchCV, RandomizedSearchCV
     from sklearn.preprocessing import StandardScaler, LabelEncoder
+    from sklearn.impute import KNNImputer, SimpleImputer
     from sklearn.linear_model import LinearRegression, LogisticRegression
     from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
     from sklearn.tree import DecisionTreeRegressor, DecisionTreeClassifier
@@ -158,17 +161,6 @@ class Vizify:
             print(f"❌ Error: The file at {file_path} was not found.")
             raise
         self.data.attrs['name'] = os.path.basename(file_path)
-    
-    @staticmethod
-    def launch_dashboard():
-        """Launches the interactive Streamlit dashboard."""
-        print("🚀 Launching Vizify Dashboard...")
-        try:
-            # Run this file as a Streamlit app
-            subprocess.run(["streamlit", "run", __file__, "run_dashboard"], check=True)
-        except Exception as e:
-            print(f"❌ Error launching dashboard: {e}")
-            print("Ensure streamlit is installed: pip install streamlit")
         
         if sample_size and len(self.data) > sample_size:
             print(f"ℹ️ Dataset is large. Using a random sample of {sample_size} rows for plotting.")
@@ -196,6 +188,29 @@ class Vizify:
                 print(f"⚠️ Failed to configure Gemini API key: {e}. Interpretations will be DISABLED.")
         else:
             print("ℹ️ No API key provided. Interpretations are DISABLED.")
+
+    def launch_dashboard(self=None, file_path=None, df=None, port=None):
+        """Launches the interactive Vizify Studio dashboard."""
+        print("[Vizify] Launching Vizify Studio Dashboard...")
+        try:
+            from .dashboard import start_server
+        except (ImportError, ValueError):
+            from dashboard import start_server
+
+        if isinstance(self, Vizify):
+            start_server(df=self.data, port=port)
+        else:
+            actual_df = df
+            actual_file = file_path
+            actual_port = port
+            if isinstance(self, str):
+                actual_file = self
+            elif isinstance(self, pd.DataFrame):
+                actual_df = self
+            elif isinstance(self, int):
+                actual_port = self
+            start_server(file_path=actual_file, df=actual_df, port=actual_port)
+
 
     def _find_time_cols(self):
         time_cols = []
@@ -483,31 +498,31 @@ def run_dashboard():
     # GLOBAL SLICERS (apply to entire dashboard)
     # ======================================================================
     def render_global_slicers(df):
-        st.sidebar.subheader("🌐 Global Slicers")
         df = df.copy()
         cat_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
         num_cols = df.select_dtypes(include=['number']).columns.tolist()
         dt_cols = df.select_dtypes(include=['datetime64[ns]', 'datetime64[ns, UTC]']).columns.tolist()
 
-        for col in cat_cols:
-            vals = df[col].dropna().unique().tolist()
-            default_vals = st.sidebar.multiselect(f"{col}", vals, default=vals)
-            if default_vals:
-                df = df[df[col].isin(default_vals)]
+        with st.sidebar.expander("🌐 Global Data Filters", expanded=False):
+            for col in cat_cols:
+                vals = df[col].dropna().unique().tolist()
+                default_vals = st.multiselect(f"{col}", vals, default=vals)
+                if default_vals:
+                    df = df[df[col].isin(default_vals)]
 
-        for col in num_cols[:6]:
-            col_min, col_max = float(df[col].min()), float(df[col].max())
-            if np.isfinite(col_min) and np.isfinite(col_max) and col_min != col_max:
-                r = st.sidebar.slider(f"{col} range", col_min, col_max, (col_min, col_max))
-                df = df[(df[col] >= r[0]) & (df[col] <= r[1])]
+            for col in num_cols[:6]:
+                col_min, col_max = float(df[col].min()), float(df[col].max())
+                if np.isfinite(col_min) and np.isfinite(col_max) and col_min != col_max:
+                    r = st.slider(f"{col} range", col_min, col_max, (col_min, col_max))
+                    df = df[(df[col] >= r[0]) & (df[col] <= r[1])]
 
-        for col in dt_cols[:3]:
-            min_d, max_d = df[col].min(), df[col].max()
-            if pd.notna(min_d) and pd.notna(max_d) and min_d != max_d:
-                r = st.sidebar.date_input(f"{col} range", (min_d.date(), max_d.date()))
-                if isinstance(r, (list, tuple)) and len(r) == 2:
-                    start, end = pd.to_datetime(r[0]), pd.to_datetime(r[1]) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
-                    df = df[(df[col] >= start) & (df[col] <= end)]
+            for col in dt_cols[:3]:
+                min_d, max_d = df[col].min(), df[col].max()
+                if pd.notna(min_d) and pd.notna(max_d) and min_d != max_d:
+                    r = st.date_input(f"{col} range", (min_d.date(), max_d.date()))
+                    if isinstance(r, (list, tuple)) and len(r) == 2:
+                        start, end = pd.to_datetime(r[0]), pd.to_datetime(r[1]) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+                        df = df[(df[col] >= start) & (df[col] <= end)]
         return df
 
     # ======================================================================
@@ -596,6 +611,48 @@ def run_dashboard():
         # Local Chat
         render_local_chat(key_prefix, corr, fig.layout.title.text)
 
+    def render_text_to_chart(df, key_prefix):
+        st.markdown("#### 🗣️ Text-to-Chart (Generative AI Builder)")
+        user_prompt = st.text_area("Describe the chart you want to build...", key=f"{key_prefix}_prompt")
+        
+        if st.button("✨ Generate Chart", key=f"{key_prefix}_gen_btn", type="primary"):
+            if not st.session_state.api_key:
+                st.warning("Please enter your Gemini API Key in the sidebar.")
+                return
+            
+            with st.spinner("AI is building your chart..."):
+                try:
+                    client = genai.Client(api_key=st.session_state.api_key)
+                    model_name = st.session_state.selected_model
+                    
+                    schema = df.dtypes.to_string()
+                    sys_prompt = f"""You are a python Plotly Express expert.
+Dataframe 'df' is available with these columns and types:
+{schema}
+
+User request: {user_prompt}
+
+Return ONLY valid python code that creates a Plotly Express figure assigned to the variable 'fig'.
+Example:
+fig = px.scatter(df, x='A', y='B', color='C')
+Do NOT include markdown formatting, backticks, or comments. ONLY code.
+"""
+                    response = client.models.generate_content(model=model_name, contents=sys_prompt)
+                    code_to_run = response.text.replace("```python", "").replace("```", "").strip()
+                    
+                    local_vars = {'df': df, 'px': px, 'pd': pd, 'np': np}
+                    exec(code_to_run, globals(), local_vars)
+                    fig = local_vars.get('fig')
+                    if fig:
+                        fig.update_layout(template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+                        st.plotly_chart(fig, use_container_width=True)
+                        with st.expander("Show Generated Code"):
+                            st.code(code_to_run, language='python')
+                    else:
+                        st.error("Failed to generate 'fig' variable.")
+                except Exception as e:
+                    st.error(f"Error building chart: {e}")
+
     # ======================================================================
     # NEW: ML TRAINING FUNCTION
     # ======================================================================
@@ -668,7 +725,7 @@ def run_dashboard():
         # Handle missing values
         handle_missing = st.selectbox(
             "How to handle missing values?",
-            ["Drop rows with missing values", "Fill with mean (numeric) / mode (categorical)", "Fill with median (numeric) / mode (categorical)"],
+            ["Drop rows with missing values", "Fill with mean (numeric) / mode (categorical)", "Fill with median (numeric) / mode (categorical)", "KNN Imputation (numeric only)"],
             key=f"{key_prefix}_missing"
         )
         
@@ -695,6 +752,18 @@ def run_dashboard():
             elif "median" in handle_missing:
                 for col in X.select_dtypes(include=[np.number]).columns:
                     X[col] = X[col].fillna(X[col].median())
+                for col in X.select_dtypes(include=['object', 'category']).columns:
+                    if not X[col].empty:
+                        X[col] = X[col].fillna(X[col].mode().iloc[0] if len(X[col].mode()) > 0 else 'Unknown')
+                if y.dtype in ['int64', 'float64']:
+                    y = y.fillna(y.median())
+                else:
+                    y = y.fillna(y.mode().iloc[0] if len(y.mode()) > 0 else 'Unknown')
+            elif "KNN" in handle_missing:
+                num_cols_X = X.select_dtypes(include=[np.number]).columns
+                if len(num_cols_X) > 0:
+                    imputer = KNNImputer(n_neighbors=5)
+                    X[num_cols_X] = imputer.fit_transform(X[num_cols_X])
                 for col in X.select_dtypes(include=['object', 'category']).columns:
                     if not X[col].empty:
                         X[col] = X[col].fillna(X[col].mode().iloc[0] if len(X[col].mode()) > 0 else 'Unknown')
@@ -762,6 +831,7 @@ def run_dashboard():
             random_state = st.number_input("Random Seed", value=42, key=f"{key_prefix}_seed")
         with col3:
             scale_features = st.checkbox("Scale Features", value=True, key=f"{key_prefix}_scale")
+            tune_hyperparameters = st.checkbox("Enable Hyperparameter Tuning", value=False, help="Uses GridSearchCV to find better parameters (Takes longer)", key=f"{key_prefix}_tune")
         
         # Step 6: Train Models
         if st.button("🚀 Train Models", key=f"{key_prefix}_train_btn", type="primary"):
@@ -791,7 +861,25 @@ def run_dashboard():
                         
                         # Train model
                         model = models[model_name]
-                        model.fit(X_train_scaled, y_train)
+                        if tune_hyperparameters:
+                            param_grid = {}
+                            if "Random Forest" in model_name:
+                                param_grid = {'n_estimators': [50, 100], 'max_depth': [None, 10, 20]}
+                            elif "Decision Tree" in model_name:
+                                param_grid = {'max_depth': [None, 10, 20, 30]}
+                            elif "Support Vector Machine" in model_name:
+                                param_grid = {'C': [0.1, 1, 10]}
+                            elif "K-Nearest Neighbors" in model_name:
+                                param_grid = {'n_neighbors': [3, 5, 7, 9]}
+                            
+                            if param_grid:
+                                search = GridSearchCV(model, param_grid, cv=3, n_jobs=-1)
+                                search.fit(X_train_scaled, y_train)
+                                model = search.best_estimator_
+                            else:
+                                model.fit(X_train_scaled, y_train)
+                        else:
+                            model.fit(X_train_scaled, y_train)
                         
                         # Make predictions
                         y_pred = model.predict(X_test_scaled)
@@ -931,6 +1019,40 @@ def run_dashboard():
                     labels=dict(x="Predicted", y="Actual", color="Count")
                 )
                 st.plotly_chart(fig, use_container_width=True)
+            
+            # Feature Importance
+            best_model_obj = st.session_state.ml_models[key_prefix][best_model]['model']
+            features_list = st.session_state.ml_models[key_prefix][best_model]['features']
+            
+            if hasattr(best_model_obj, 'feature_importances_'):
+                importances = best_model_obj.feature_importances_
+                feat_df = pd.DataFrame({'Feature': features_list, 'Importance': importances})
+                feat_df = feat_df.sort_values('Importance', ascending=True).tail(10)
+                
+                fig = px.bar(
+                    feat_df, 
+                    x='Importance', 
+                    y='Feature',
+                    orientation='h',
+                    title=f"Top 10 Feature Importances - {best_model}"
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            elif hasattr(best_model_obj, 'coef_'):
+                coefs = best_model_obj.coef_
+                if coefs.ndim > 1:
+                    coefs = coefs[0]
+                feat_df = pd.DataFrame({'Feature': features_list, 'Coefficient': coefs})
+                feat_df['Abs_Coefficient'] = feat_df['Coefficient'].abs()
+                feat_df = feat_df.sort_values('Abs_Coefficient', ascending=True).tail(10)
+                
+                fig = px.bar(
+                    feat_df, 
+                    x='Coefficient', 
+                    y='Feature',
+                    orientation='h',
+                    title=f"Top 10 Feature Coefficients - {best_model}"
+                )
+                st.plotly_chart(fig, use_container_width=True)
         
         # Step 8: Model Export
         if key_prefix in st.session_state.ml_models:
@@ -1004,6 +1126,67 @@ print(predictions)
                 
                 except Exception as e:
                     st.error(f"Error creating model download: {e}")
+        
+        # Step 9: Live Prediction Playground
+        if key_prefix in st.session_state.ml_models:
+            st.markdown("---")
+            st.subheader("Step 9: 🎮 Live Prediction Playground")
+            st.markdown("Adjust the values below to see real-time predictions from your best model!")
+            
+            models_available = list(st.session_state.ml_models[key_prefix].keys())
+            model_to_use_name = st.selectbox("Select model for live predictions:", models_available, key=f"{key_prefix}_live_model")
+            
+            model_data = st.session_state.ml_models[key_prefix][model_to_use_name]
+            live_model = model_data['model']
+            live_scaler = model_data['scaler']
+            live_features = model_data['features']
+            
+            col1, col2 = st.columns([0.7, 0.3])
+            
+            with col1:
+                input_data = {}
+                for feat in live_features:
+                    # Retrieve min, max, mean from original processed dataset X
+                    if feat in X.columns:
+                        if X[feat].dtype in [np.float64, np.int64]:
+                            min_val = float(X[feat].min())
+                            max_val = float(X[feat].max())
+                            mean_val = float(X[feat].mean())
+                            if min_val == max_val:
+                                input_data[feat] = st.number_input(feat, value=mean_val, key=f"{key_prefix}_live_{feat}")
+                            else:
+                                input_data[feat] = st.slider(feat, min_value=min_val, max_value=max_val, value=mean_val, key=f"{key_prefix}_live_{feat}")
+                        else:
+                            input_data[feat] = st.text_input(feat, value="0", key=f"{key_prefix}_live_{feat}")
+                    else:
+                        input_data[feat] = st.number_input(feat, value=0.0, key=f"{key_prefix}_live_{feat}")
+                         
+            with col2:
+                # Predict instantly
+                st.markdown("### 🎯 Live Prediction")
+                try:
+                    input_df = pd.DataFrame([input_data])
+                    if live_scaler:
+                        input_scaled = live_scaler.transform(input_df)
+                        pred = live_model.predict(input_scaled)[0]
+                    else:
+                        pred = live_model.predict(input_df)[0]
+                    
+                    # If classification, show label
+                    le = model_data['label_encoder']
+                    if le:
+                        pred_label = le.inverse_transform([int(pred)])[0]
+                        st.markdown(f"<h2 style='color: #10B981;'>{pred_label}</h2>", unsafe_allow_html=True)
+                        
+                        # Show probabilities if supported
+                        if hasattr(live_model, "predict_proba"):
+                            probs = live_model.predict_proba(input_scaled if live_scaler else input_df)[0]
+                            max_prob = max(probs) * 100
+                            st.caption(f"Confidence: {max_prob:.1f}%")
+                    else:
+                        st.markdown(f"<h2 style='color: #3B82F6;'>{pred:.4f}</h2>", unsafe_allow_html=True)
+                except Exception as e:
+                    st.error(f"Prediction error: {e}")
 
 
     # ======================================================================
@@ -1105,6 +1288,7 @@ print(predictions)
         "Categorical Plot": render_categorical_plot,
         "Scatter Plot": render_scatter_plot,
         "Correlation Heatmap": render_heatmap,
+        "Text-to-Chart (AI)": render_text_to_chart,
         "ML Model Training": render_ml_training,  # NEW ML FEATURE
     }
 
@@ -1266,6 +1450,57 @@ print(predictions)
                 border-radius: 8px;
             }
 
+            /* Style Sidebar Navigation Radio list */
+            div[data-testid="stSidebar"] div[data-testid="stRadio"] > div {
+                gap: 8px;
+            }
+            div[data-testid="stSidebar"] div[data-testid="stRadio"] label {
+                background: rgba(30, 41, 59, 0.4);
+                border: 1px solid rgba(148, 163, 184, 0.1);
+                border-radius: 8px;
+                padding: 10px 14px;
+                color: #94A3B8;
+                font-weight: 500;
+                transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+                width: 100%;
+                display: flex;
+                align-items: center;
+                cursor: pointer;
+            }
+            div[data-testid="stSidebar"] div[data-testid="stRadio"] label:hover {
+                background: rgba(124, 58, 237, 0.15);
+                border-color: rgba(124, 58, 237, 0.4);
+                color: #FFFFFF;
+                transform: translateX(4px);
+            }
+            /* Hide Streamlit radio button standard circle widget */
+            div[data-testid="stSidebar"] div[data-testid="stRadio"] label[data-baseweb="radio"] > div:first-child {
+                display: none !important;
+            }
+            div[data-testid="stSidebar"] div[data-testid="stRadio"] label[data-checked="true"] {
+                background: linear-gradient(90deg, rgba(124, 58, 237, 0.25), rgba(59, 130, 246, 0.25)) !important;
+                border-color: #3B82F6 !important;
+                color: #FFFFFF !important;
+                box-shadow: 0 0 15px rgba(59, 130, 246, 0.2);
+            }
+            div[data-testid="stSidebar"] div[data-testid="stRadio"] [data-testid="stWidgetLabel"] {
+                display: none;
+            }
+            
+            /* Metric cards improvements */
+            div[data-testid="metric-container"] {
+                background-color: rgba(30, 41, 59, 0.4) !important;
+                border: 1px solid rgba(148, 163, 184, 0.1) !important;
+                border-radius: 12px !important;
+                padding: 1.2rem !important;
+                box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1) !important;
+                transition: transform 0.2s ease !important;
+            }
+            div[data-testid="metric-container"]:hover {
+                transform: translateY(-2px) !important;
+                border-color: rgba(148, 163, 184, 0.2) !important;
+            }
+
         </style>
         """, unsafe_allow_html=True)
 
@@ -1278,115 +1513,372 @@ print(predictions)
         st.header("⚙️ Controls")
         uploaded_file = st.file_uploader("1) Upload CSV", type="csv")
         st.session_state.api_key = st.text_input("2) Gemini API Key (optional for AI insights)", type="password")
-        st.markdown("---")
-        st.header("Add Charts to Dashboard")
-        chart_type_to_add = st.selectbox("Select a chart type:", list(PLOT_FUNCTIONS.keys()))
-        if st.button(f"➕ Add {chart_type_to_add}", use_container_width=True):
-            st.session_state.dashboard_items.append({"type": chart_type_to_add, "id": time.time()})
-            st.rerun()
+        
+        # Display navigation only if file is uploaded
+        if uploaded_file is not None:
+            st.markdown("---")
+            st.subheader("🗺️ Navigation")
+            page = st.radio(
+                "Go to Page:",
+                ["📊 Data Explorer", "🧹 Data Profiler", "🤖 ML Studio", "💬 AI Data Agent"],
+                key="dashboard_page_nav"
+            )
+        else:
+            page = "📊 Data Explorer"
+
+        if uploaded_file is not None and page == "📊 Data Explorer":
+            st.markdown("---")
+            st.header("Add Charts to Dashboard")
+            chart_type_to_add = st.selectbox("Select a chart type:", list(PLOT_FUNCTIONS.keys()))
+            if st.button(f"➕ Add {chart_type_to_add}", use_container_width=True):
+                st.session_state.dashboard_items.append({"type": chart_type_to_add, "id": time.time()})
+                st.rerun()
 
     if uploaded_file is None:
-        st.info("Please upload a CSV file to begin building your dashboard.")
+        st.markdown("""
+        <div style="background-color: rgba(30, 41, 59, 0.4); border: 1px solid rgba(148, 163, 184, 0.1); border-radius: 12px; padding: 2.5rem; text-align: center; margin-top: 2rem;">
+            <h2 style="color: #A78BFA; font-weight: 600;">Welcome to Vizify Dashboard Studio</h2>
+            <p style="color: #94A3B8; font-size: 1.1rem; margin-bottom: 2rem;">
+                A next-generation platform for automated data analysis, visualization, and no-code machine learning.
+            </p>
+            <div style="background: rgba(124, 58, 237, 0.1); border: 1px dashed rgba(124, 58, 237, 0.3); border-radius: 8px; padding: 1.5rem; color: #E2E8F0; display: inline-block;">
+                👈 <strong>To get started, upload a CSV dataset in the sidebar.</strong>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
         return
 
-    df_raw = pd.read_csv(uploaded_file)
+    if "df_cleaned" in st.session_state and st.session_state.get('uploaded_file_name') == uploaded_file.name:
+        df_raw = st.session_state.df_cleaned.copy()
+    else:
+        df_raw = pd.read_csv(uploaded_file)
+        
     df_raw = coerce_datetime_cols(df_raw)
     df = render_global_slicers(df_raw)
 
     # Render Chat Interface
-    render_chat_interface(df)
+    if page == "📊 Data Explorer":
+        render_chat_interface(df)
 
-    if not st.session_state.dashboard_items:
-        st.info("Your dashboard is empty. Add some charts from the sidebar to get started!")
-    
-    for i, item in enumerate(list(st.session_state.dashboard_items)):
-        with st.container(border=True):
-            header_cols = st.columns([0.85, 0.15])
-            header_cols[0].subheader(item["type"])
-            if header_cols[1].button("🗑️", key=f"del_{item['id']}", use_container_width=True, help="Delete"):
-                st.session_state.dashboard_items.pop(i)
+    # ======================================================================
+    # PAGES
+    # ======================================================================
+    if page == "📊 Data Explorer":
+        st.markdown('<h3 style="color: #A78BFA; font-weight: 600;">📊 Data Explorer & Dashboard</h3>', unsafe_allow_html=True)
+        
+        if not st.session_state.dashboard_items:
+            st.info("Your dashboard is empty. Add some charts from the sidebar to get started!")
+        
+        for i, item in enumerate(list(st.session_state.dashboard_items)):
+            with st.container(border=True):
+                header_cols = st.columns([0.85, 0.15])
+                header_cols[0].subheader(item["type"])
+                if header_cols[1].button("🗑️", key=f"del_{item['id']}", use_container_width=True, help="Delete"):
+                    st.session_state.dashboard_items.pop(i)
+                    st.rerun()
+                
+                render_function = PLOT_FUNCTIONS.get(item["type"])
+                if render_function:
+                    render_function(df, key_prefix=f"item_{item['id']}")
+                else:
+                    st.warning(f"Unknown chart type: {item['type']}")
+        
+        st.markdown("---")
+        
+        util_c1, util_c2, util_c3 = st.columns(3)
+        with util_c1:
+            if st.button("🔄 Reset Dashboard Items"):
+                st.session_state.dashboard_items = []
                 st.rerun()
-            
-            render_function = PLOT_FUNCTIONS.get(item["type"])
-            if render_function:
-                render_function(df, key_prefix=f"item_{item['id']}")
-            else:
-                st.warning(f"Unknown chart type: {item['type']}")
-    
-    st.markdown("---")
-    
-    util_c1, util_c2, util_c3 = st.columns(3)
-    with util_c1:
-        if st.button("🔄 Reset Dashboard Items"):
-            st.session_state.dashboard_items = []
-            st.rerun()
-    with util_c2:
-        csv_buf = io.StringIO()
-        df.to_csv(csv_buf, index=False)
-        st.download_button("⬇️ Export Filtered CSV", data=csv_buf.getvalue(), file_name="filtered_data.csv")
-    
-    # --- PDF Export option ---
-    with util_c3:
-        if st.button("📄 Download Dashboard as PDF"):
-            if not REPORTLAB_AVAILABLE:
-                st.error("PDF export requires `reportlab`. Please run `pip install reportlab`.")
-                return
-
-            with st.spinner("Generating PDF... This may take a moment."):
-                try:
-                    pdf_buffer = io.BytesIO()
-                    c = canvas.Canvas(pdf_buffer, pagesize=letter)
-                    width, height = letter
-                    y_pos = height - 50
-
-                    c.setFont("Helvetica-Bold", 18)
-                    c.drawString(50, y_pos, "Vizify Dashboard Report")
-                    y_pos -= 20
-                    c.setFont("Helvetica", 10)
-                    c.drawString(50, y_pos, f"Exported on: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')}")
-                    y_pos -= 15
-                    c.drawString(50, y_pos, f"Data Source: {uploaded_file.name} ({len(df)} filtered rows)")
-                    y_pos -= 30
-
-                    for item in st.session_state.dashboard_items:
-                        generator_func = PLOT_GENERATORS.get(item['type'])
-                        if not generator_func: continue
-
-                        fig = generator_func(df, item['id'])
-                        if fig is None: continue
-
-                        # Check for page break
-                        if y_pos < 350:
-                            c.showPage()
+        with util_c2:
+            csv_buf = io.StringIO()
+            df.to_csv(csv_buf, index=False)
+            st.download_button("⬇️ Export Filtered CSV", data=csv_buf.getvalue(), file_name="filtered_data.csv")
+        
+        # --- PDF Export option ---
+        with util_c3:
+            if st.button("📄 Download Dashboard as PDF"):
+                if not REPORTLAB_AVAILABLE:
+                    st.error("PDF export requires `reportlab`. Please run `pip install reportlab`.")
+                else:
+                    with st.spinner("Generating PDF... This may take a moment."):
+                        try:
+                            pdf_buffer = io.BytesIO()
+                            c = canvas.Canvas(pdf_buffer, pagesize=letter)
+                            width, height = letter
                             y_pos = height - 50
 
-                        c.setFont("Helvetica-Bold", 14)
-                        c.drawString(50, y_pos, item['type'])
-                        y_pos -= 280 # Reserve space for the image
+                            c.setFont("Helvetica-Bold", 18)
+                            c.drawString(50, y_pos, "Vizify Dashboard Report")
+                            y_pos -= 20
+                            c.setFont("Helvetica", 10)
+                            c.drawString(50, y_pos, f"Exported on: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')}")
+                            y_pos -= 15
+                            c.drawString(50, y_pos, f"Data Source: {uploaded_file.name} ({len(df)} filtered rows)")
+                            y_pos -= 30
 
-                        # Convert plot to image and draw it
-                        img_data = fig.to_image(format="png", width=600, height=250, scale=2)
-                        img_reader = ImageReader(io.BytesIO(img_data))
-                        c.drawImage(img_reader, 50, y_pos, width=500, height=250, preserveAspectRatio=True, anchor='n')
-                        y_pos -= 20
+                            for item in st.session_state.dashboard_items:
+                                generator_func = PLOT_GENERATORS.get(item['type'])
+                                if not generator_func: continue
 
-                    c.save()
-                    pdf_buffer.seek(0)
+                                fig = generator_func(df, item['id'])
+                                if fig is None: continue
 
-                    st.download_button(
-                        label="✅ Download PDF Now",
-                        data=pdf_buffer,
-                        file_name=f"vizify_report_{pd.Timestamp.now().strftime('%Y%m%d')}.pdf",
-                        mime="application/pdf"
+                                # Check for page break
+                                if y_pos < 350:
+                                    c.showPage()
+                                    y_pos = height - 50
+
+                                c.setFont("Helvetica-Bold", 14)
+                                c.drawString(50, y_pos, item['type'])
+                                y_pos -= 280 # Reserve space for the image
+
+                                # Convert plot to image and draw it
+                                img_data = fig.to_image(format="png", width=600, height=250, scale=2)
+                                img_reader = ImageReader(io.BytesIO(img_data))
+                                c.drawImage(img_reader, 50, y_pos, width=500, height=250, preserveAspectRatio=True, anchor='n')
+                                y_pos -= 20
+
+                            c.save()
+                            pdf_buffer.seek(0)
+
+                            st.download_button(
+                                label="✅ Download PDF Now",
+                                data=pdf_buffer,
+                                file_name=f"vizify_report_{pd.Timestamp.now().strftime('%Y%m%d')}.pdf",
+                                mime="application/pdf"
+                            )
+                        except ImportError:
+                            st.error("PDF export requires `kaleido`. Please run `pip install kaleido`.")
+                        except Exception as e:
+                            st.error(f"An error occurred during PDF generation: {e}")
+
+    elif page == "🧹 Data Profiler":
+        st.markdown('<h3 style="color: #A78BFA; font-weight: 600;">🧹 Data Profiler & Cleaner</h3>', unsafe_allow_html=True)
+        st.markdown('Analyze data quality, view statistics, and perform cleaning operations.')
+        st.markdown('---')
+        
+        # Row 1: Metrics Cards
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Total Rows", f"{df.shape[0]:,}")
+        col2.metric("Total Columns", f"{df.shape[1]}")
+        
+        missing_count = df.isnull().sum().sum()
+        total_cells = df.size
+        missing_pct = (missing_count / total_cells * 100) if total_cells > 0 else 0
+        col3.metric("Missing Values", f"{missing_count:,}", f"{missing_pct:.1f}%")
+        
+        duplicate_count = df.duplicated().sum()
+        col4.metric("Duplicate Rows", f"{duplicate_count:,}")
+        
+        # Row 2: Columns breakdown and Clean action
+        c1, c2 = st.columns([0.6, 0.4])
+        with c1:
+            st.markdown("### 📊 Column Types & Health")
+            # Build list of columns, their datatypes, and missing percentage
+            col_health_data = []
+            for col in df.columns:
+                null_count = df[col].isnull().sum()
+                null_pct = (null_count / len(df) * 100)
+                col_health_data.append({
+                    "Column Name": col,
+                    "Data Type": str(df[col].dtype),
+                    "Non-Null Count": len(df) - null_count,
+                    "Missing %": f"{null_pct:.1f}%"
+                })
+            st.dataframe(pd.DataFrame(col_health_data), use_container_width=True)
+            
+        with c2:
+            st.markdown("### 🪄 Magic Data Cleaner")
+            st.info("The automated data cleaner will:\n1. Drop columns with more than 90% missing values.\n2. Strip currency symbols ($) and commas from numeric fields stored as text.\n3. Attempt to coerce date/time fields.")
+            
+            # Action button
+            if st.button("🪄 Run Magic Clean", use_container_width=True, type="primary"):
+                df_temp = df_raw.copy()
+                cleaned_actions = []
+                for col in df_temp.columns:
+                    if df_temp[col].isnull().sum() / len(df_temp) > 0.9:
+                        df_temp = df_temp.drop(col, axis=1)
+                        cleaned_actions.append(f"Dropped column '{col}' (>90% nulls)")
+                    elif df_temp[col].dtype == 'object':
+                        try:
+                            # Strip $ and , and try conversion
+                            cleaned_col = df_temp[col].astype(str).str.replace('$', '').str.replace(',', '')
+                            converted = pd.to_numeric(cleaned_col)
+                            df_temp[col] = converted
+                            cleaned_actions.append(f"Converted '{col}' to numeric")
+                        except:
+                            pass
+                st.session_state.df_cleaned = df_temp
+                st.session_state.uploaded_file_name = uploaded_file.name
+                
+                # Show results in a toast or callout
+                st.success("Magic cleaning completed successfully!")
+                for action in cleaned_actions:
+                    st.caption(f"- {action}")
+                time.sleep(1.5)
+                st.rerun()
+
+        # Row 3: Descriptive Statistics
+        st.markdown("### 📈 Summary Statistics")
+        st.dataframe(df.describe(include='all').T.fillna("N/A"), use_container_width=True)
+
+    elif page == "🤖 ML Studio":
+        st.markdown('<h3 style="color: #3B82F6; font-weight: 600;">🤖 No-Code Machine Learning Studio</h3>', unsafe_allow_html=True)
+        st.markdown('Train, evaluate, and compare multiple models, inspect feature importance, and test live predictions.')
+        st.markdown('---')
+        
+        render_ml_training(df, key_prefix="ml_studio_page")
+
+    elif page == "💬 AI Data Agent":
+        st.markdown('<h3 style="color: #10B981; font-weight: 600;">💬 AI Data Agent (Python Interpreter)</h3>', unsafe_allow_html=True)
+        st.markdown('Ask questions in natural language. The agent will write and run Python code to analyze your data and visualize results.')
+        st.markdown('---')
+        
+        if "agent_chat_history" not in st.session_state:
+            st.session_state.agent_chat_history = []
+
+        api_key = st.session_state.get("api_key") or os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            st.warning("⚠️ Please enter your Gemini API Key in the sidebar to enable the AI Data Agent.")
+            return
+
+        # Render past messages
+        for msg in st.session_state.agent_chat_history:
+            with st.chat_message(msg["role"]):
+                if msg["role"] == "user":
+                    st.markdown(msg["content"])
+                else:
+                    # Assistant message
+                    st.markdown(msg["content"])
+                    
+                    # Display Plotly chart if generated
+                    if "fig" in msg and msg["fig"] is not None:
+                        st.plotly_chart(msg["fig"], use_container_width=True)
+                    
+                    # Display error if execution failed
+                    if "error" in msg and msg["error"]:
+                        st.error(f"Execution Error: {msg['error']}")
+                        
+                    # Display stdout prints if any
+                    if "stdout" in msg and msg["stdout"].strip():
+                        with st.expander("Output Prints"):
+                            st.code(msg["stdout"])
+                            
+                    # Display generated code
+                    if "code" in msg and msg["code"]:
+                        with st.expander("Show Generated Python Code"):
+                            st.code(msg["code"], language="python")
+
+        if prompt := st.chat_input("Ask the Data Agent (e.g., 'What is the correlation between sales and profit?' or 'Show me the distribution of age')"):
+            # Display user message
+            with st.chat_message("user"):
+                st.markdown(prompt)
+            st.session_state.agent_chat_history.append({"role": "user", "content": prompt})
+            
+            # Now generate answer
+            with st.spinner("AI is thinking and writing code..."):
+                try:
+                    client = genai.Client(api_key=api_key)
+                    model_name = st.session_state.get('selected_model', 'gemini-2.0-flash')
+                    
+                    # Define schema context
+                    schema = df.dtypes.to_string()
+                    sample_data = df.head(3).to_string()
+                    
+                    sys_prompt = f"""You are a senior data analyst and expert Python programmer.
+You have access to a pandas DataFrame named 'df' loaded in memory.
+DataFrame columns and datatypes:
+{schema}
+
+DataFrame sample (first 3 rows):
+{sample_data}
+
+User Request: {prompt}
+
+Your Task:
+Generate valid Python code that will perform the requested analysis or visualization.
+Rules:
+1. The DataFrame 'df' is already defined. Do NOT re-read or create a mock DataFrame.
+2. If the user wants to calculate something (e.g., mean, groups, correlation), calculate it and print() the results, OR assign the result to the variable 'result'.
+3. If the user wants a chart, generate a Plotly Express figure and assign it to the variable 'fig' (e.g. `fig = px.bar(...)` or `fig = px.scatter(...)`). Choose a professional dark layout.
+4. Output ONLY valid, executable Python code. Do NOT wrap it in markdown code blocks like ```python. Do NOT include comments or explanation text in your code.
+5. If the request cannot be answered with code, print an appropriate message.
+"""
+                    
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=sys_prompt
                     )
-                except ImportError:
-                    st.error("PDF export requires `kaleido`. Please run `pip install kaleido`.")
-                except Exception as e:
-                    st.error(f"An error occurred during PDF generation: {e}")
+                    
+                    code_to_run = response.text.replace("```python", "").replace("```", "").strip()
+                    
+                    # Run the code in a sandboxed environment and capture stdout/results
+                    captured_stdout = ""
+                    error_msg = None
+                    fig = None
+                    result = None
+                    
+                    old_stdout = sys.stdout
+                    redirected_output = io.StringIO()
+                    sys.stdout = redirected_output
+                    
+                    local_vars = {
+                        'df': df,
+                        'pd': pd,
+                        'np': np,
+                        'px': px,
+                        'plt': plt,
+                        'sns': sns,
+                        'result': None,
+                        'fig': None
+                    }
+                    
+                    try:
+                        exec(code_to_run, globals(), local_vars)
+                        result = local_vars.get('result')
+                        fig = local_vars.get('fig')
+                    except Exception as e:
+                        error_msg = str(e)
+                    finally:
+                        sys.stdout = old_stdout
+                        captured_stdout = redirected_output.getvalue()
+                    
+                    # Ask Gemini to write a summary analysis of the execution results
+                    summary_text = ""
+                    if error_msg:
+                        summary_text = f"An error occurred while running the analysis code: `{error_msg}`. Please try rephrasing your request."
+                    else:
+                        summary_prompt = f"""You are a data analyst summarizing execution results.
+User question: "{prompt}"
+Generated Python Code:
+{code_to_run}
+Execution prints/stdout:
+{captured_stdout}
+Returned variable result:
+{result}
+Chart generated: {'Yes' if fig is not None else 'No'}
 
-# ==============================================================================
-# SECTION 3: MAIN LAUNCHER AND PDF-MODE CLI
-# ==============================================================================
+Write a concise, professional, data-analyst explanation of these results to answer the user's question. Focus on key insights. Do not describe the code itself, explain the findings.
+"""
+                        summary_response = client.models.generate_content(
+                            model=model_name,
+                            contents=summary_prompt
+                        )
+                        summary_text = summary_response.text
+                    
+                    # Store in chat history
+                    st.session_state.agent_chat_history.append({
+                        "role": "assistant",
+                        "content": summary_text,
+                        "code": code_to_run,
+                        "stdout": captured_stdout,
+                        "error": error_msg,
+                        "fig": fig
+                    })
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error executing AI Agent: {e}")
 
 def run_pdf_generator_cli():
     """Interactive Command-Line Interface to configure and run the PDF report generator."""
@@ -1470,7 +1962,11 @@ def run_pdf_generator_cli():
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == 'run_dashboard':
-        run_dashboard()
+        try:
+            from .dashboard import start_server
+        except (ImportError, ValueError):
+            from dashboard import start_server
+        start_server()
     else:
         print("=" * 60)
         print("      Welcome to Vizify: The Automated Analysis Tool!      ")
@@ -1492,11 +1988,12 @@ if __name__ == "__main__":
             else:
                 run_pdf_generator_cli()
         elif choice == '2':
-            print("Launching Streamlit dashboard... Your browser will open shortly.")
+            print("Launching Vizify Studio Dashboard... Your browser will open shortly.")
             try:
-                subprocess.run(["streamlit", "run", __file__, "run_dashboard"], check=True)
-            except FileNotFoundError:
-                print("❌ Error: 'streamlit' command not found.")
-                print("Please install Streamlit and Plotly first: pip install streamlit plotly")
+                from .dashboard import start_server
+                start_server()
+            except (ImportError, ValueError):
+                from dashboard import start_server
+                start_server()
             except Exception as e:
-                print(f"An error occurred while launching Streamlit: {e}")
+                print(f"An error occurred while launching Dashboard: {e}")
