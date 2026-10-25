@@ -9,6 +9,14 @@ export default function AIDataAgent({ apiKey, selectedModel }) {
   const [loading, setLoading] = useState(false);
   const messagesEndRef = useRef(null);
 
+  const friendlyError = (error) => {
+    const message = String(error || '');
+    if (/API_KEY_INVALID|API key not valid|invalid api key/i.test(message)) {
+      return 'Gemini rejected this key. Enter a valid Gemini API key in the sidebar. PyPI upload keys (pypi-?) cannot be used here.';
+    }
+    return message.length > 240 ? `${message.slice(0, 237)}?` : message;
+  };
+
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
@@ -44,20 +52,21 @@ export default function AIDataAgent({ apiKey, selectedModel }) {
         ...prev,
         {
           role: 'assistant',
-          content: response.content,
-          code: response.code,
-          stdout: response.stdout,
-          error: response.error,
+          content: response.error ? friendlyError(response.error) : response.content,
+          code: response.error ? '' : response.code,
+          stdout: response.error ? '' : response.stdout,
+          error: response.error ? '' : response.error,
           fig: response.fig // Plotly json data if available
         }
       ]);
     } catch (err) {
+      const message = friendlyError(err.message);
       setMessages(prev => [
         ...prev,
         {
           role: 'assistant',
-          content: `Error: ${err.message}`,
-          error: err.message
+          content: message,
+          error: ''
         }
       ]);
     } finally {
@@ -69,10 +78,10 @@ export default function AIDataAgent({ apiKey, selectedModel }) {
     <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 8rem)' }}>
       <div style={{ marginBottom: '1.5rem' }}>
         <h2 style={{ fontSize: '1.75rem', fontWeight: 700 }} className="glow-text-green">
-          💬 AI Data Agent
+          💬 Data Assistant
         </h2>
         <p style={{ fontSize: '0.9rem', marginTop: '0.25rem' }}>
-          Conversational data analyst. Ask questions in natural language, and the agent will write and run Python code to analyze your data.
+          Ask questions about your dataset in natural language.
         </p>
       </div>
 
@@ -90,7 +99,7 @@ export default function AIDataAgent({ apiKey, selectedModel }) {
           fontSize: '0.9rem'
         }}>
           <AlertCircle size={20} />
-          <span>Please configure your Gemini API Key in the sidebar controls to activate the AI Data Agent.</span>
+          <span>Add a Gemini API key in the sidebar to use the Data Assistant.</span>
         </div>
       )}
 
@@ -147,7 +156,7 @@ export default function AIDataAgent({ apiKey, selectedModel }) {
                     fontSize: '0.85rem',
                     fontFamily: 'monospace'
                   }}>
-                    ⚠️ Execution Error: {msg.error}
+                    ⚠️ Execution issue: {friendlyError(msg.error)}
                   </div>
                 )}
 
@@ -201,7 +210,7 @@ export default function AIDataAgent({ apiKey, selectedModel }) {
           {loading && (
             <div className="chat-bubble assistant" style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', padding: '0.85rem 1.1rem' }}>
               <span className="spinner" style={{ width: '14px', height: '14px', borderWidth: '2px' }}></span>
-              <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>AI Data Agent is thinking & executing analysis...</span>
+              <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Analyzing your data?</span>
             </div>
           )}
           <div ref={messagesEndRef} />

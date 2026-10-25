@@ -2,16 +2,33 @@ import React, { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import DataExplorer from './components/DataExplorer';
 import DataProfiler from './components/DataProfiler';
+import NLPStudio from './components/NLPStudio';
 import MLStudio from './components/MLStudio';
 import AIDataAgent from './components/AIDataAgent';
 import { request } from './api';
-import { Database, Sparkles, Cpu, MessageSquare } from 'lucide-react';
 
 const CHART_TYPES = [
-  'Distribution Plot',
-  'Categorical Plot',
+  'Clustered Column',
+  'Stacked Column',
+  'Clustered Bar',
+  'Stacked Bar',
+  'Radar (Spider) Chart',
+  'Line Chart',
+  'Area Chart',
+  'Stacked Area Chart',
+  'Waterfall Chart',
+  'Stock (OHLC) Chart',
+  'Pie Chart',
+  'Doughnut Chart',
+  'Treemap Chart',
+  'Sunburst Chart',
   'Scatter Plot',
-  'Correlation Heatmap',
+  'Bubble Chart',
+  'Histogram',
+  'Box and Whisker',
+  'Filled Map',
+  'Funnel Chart',
+  'D3 Word Cloud',
   'Text-to-Chart (AI)'
 ];
 
@@ -27,8 +44,14 @@ export default function App() {
     numeric: {},
     datetime: {}
   });
+  const [theme, setTheme] = useState(() => localStorage.getItem('vizify-theme') || 'dark');
 
-  // Load initial server state (pre-loaded dataframe/file, env api key, etc.)
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem('vizify-theme', theme);
+  }, [theme]);
+
+  // Restore the SQLite workspace and any configured Gemini key.
   useEffect(() => {
     async function initApp() {
       try {
@@ -73,6 +96,8 @@ export default function App() {
         globalFilters={globalFilters}
         setGlobalFilters={setGlobalFilters}
         chartTypes={CHART_TYPES}
+        theme={theme}
+        onToggleTheme={() => setTheme(current => current === 'dark' ? 'light' : 'dark')}
       />
 
       {/* Main Viewport */}
@@ -95,10 +120,10 @@ export default function App() {
               boxShadow: 'var(--shadow-lg)'
             }}>
               <h2 style={{ fontSize: '2rem', marginBottom: '1rem', fontWeight: 700 }} className="glow-text-primary">
-                Welcome to Vizify Studio
+                Welcome to Vizify
               </h2>
               <p style={{ fontSize: '1.05rem', color: 'var(--text-secondary)', marginBottom: '2rem', lineHeight: 1.6 }}>
-                A premium interactive web studio for automated visual analysis, statistical diagnostics, and no-code machine learning models.
+                Explore your data, build visualizations, clean text, and train practical models in one workspace.
               </p>
               <div style={{ 
                 background: 'rgba(139,92,246,0.06)', 
@@ -109,7 +134,7 @@ export default function App() {
                 fontWeight: 500,
                 fontSize: '0.95rem'
               }}>
-                👈 Get started by uploading a CSV dataset in the sidebar control panel.
+                👈 Open Data Sources to connect a file, database, or online service.
               </div>
             </div>
           </div>
@@ -130,6 +155,13 @@ export default function App() {
               <DataProfiler
                 dataInfo={dataInfo}
                 setDataInfo={setDataInfo}
+              />
+            )}
+
+            {activeTab === 'nlp' && (
+              <NLPStudio
+                dataInfo={dataInfo}
+                onDataUpdated={(newInfo) => setDataInfo(newInfo)}
               />
             )}
 

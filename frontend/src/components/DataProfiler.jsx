@@ -170,7 +170,7 @@ export default function DataProfiler({ dataInfo, setDataInfo }) {
       </div>
 
       {/* Row 3: Descriptive Statistics */}
-      <div className="glass-card" style={{ overflowX: 'auto' }}>
+      <div className="glass-card" style={{ overflowX: 'auto', marginBottom: '2rem' }}>
         <h3 style={{ fontSize: '1.15rem', marginBottom: '1rem', color: 'var(--text-primary)' }}>
           📈 Summary Statistics
         </h3>
@@ -203,6 +203,108 @@ export default function DataProfiler({ dataInfo, setDataInfo }) {
           </table>
         </div>
       </div>
+
+      {/* Row 4: SQLite High-Performance Paginated Data Table */}
+      <SQLiteTableViewer />
     </div>
   );
 }
+
+// Sub-component for SQLite Paginated Data Table
+function SQLiteTableViewer() {
+  const [pageData, setPageData] = useState([]);
+  const [columns, setColumns] = useState([]);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalRecords, setTotalRecords] = useState(0);
+  const [loading, setLoading] = useState(false);
+
+  const fetchPage = async (pageNum) => {
+    setLoading(true);
+    try {
+      const res = await request('/api/data/page', {
+        method: 'POST',
+        body: JSON.stringify({ page: pageNum, limit: 25 })
+      });
+      if (res.data) {
+        setPageData(res.data);
+        setColumns(res.columns);
+        setPage(res.page);
+        setTotalPages(res.total_pages);
+        setTotalRecords(res.total_records);
+      }
+    } catch (err) {
+      console.error('Error fetching SQLite page:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchPage(1);
+  }, []);
+
+  return (
+    <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <h3 style={{ fontSize: '1.15rem', color: 'var(--text-primary)', margin: 0 }}>
+          ⚡ SQLite Zero-RAM Lag Data Table Viewer
+        </h3>
+        <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+          Showing {pageData.length} of {totalRecords.toLocaleString()} rows (Page {page} / {totalPages})
+        </span>
+      </div>
+
+      <div style={{ overflowX: 'auto', maxHeight: '400px', overflowY: 'auto' }}>
+        {loading ? (
+          <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>Loading page from SQLite...</div>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                {columns.map(col => (
+                  <th key={col} style={{ whiteSpace: 'nowrap' }}>{col}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {pageData.map((row, idx) => (
+                <tr key={idx}>
+                  {columns.map(col => (
+                    <td key={col} style={{ whiteSpace: 'nowrap', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {String(row[col] ?? '')}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* Pagination Controls */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.5rem' }}>
+        <button
+          className="btn btn-secondary"
+          onClick={() => fetchPage(page - 1)}
+          disabled={page <= 1 || loading}
+          style={{ padding: '0.4rem 0.75rem', fontSize: '0.85rem' }}
+        >
+          Previous
+        </button>
+        <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+          Page {page} of {totalPages}
+        </span>
+        <button
+          className="btn btn-secondary"
+          onClick={() => fetchPage(page + 1)}
+          disabled={page >= totalPages || loading}
+          style={{ padding: '0.4rem 0.75rem', fontSize: '0.85rem' }}
+        >
+          Next
+        </button>
+      </div>
+    </div>
+  );
+}
+

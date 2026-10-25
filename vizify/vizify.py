@@ -18,6 +18,11 @@ from reportlab.lib.styles import getSampleStyleSheet
 from datetime import datetime
 import pickle
 
+try:
+    from .config import get_api_key
+except ImportError:
+    from config import get_api_key
+
 # --- AI and PDF Generation Imports ---
 try:
     from google import genai
@@ -96,7 +101,7 @@ def interpret_graph_with_gemini(image_path: str, prompt: str = "Briefly describe
         # Use selected model from session state if available, otherwise default
         model_name = st.session_state.get('selected_model', 'gemini-2.0-flash')
         
-        client = genai.Client(api_key=os.getenv("GEMINI_API_KEY")) 
+        client = genai.Client(api_key=get_api_key())
         with open(image_path, "rb") as f:
              image_bytes = f.read()
         
@@ -155,6 +160,7 @@ class PDF(FPDF):
 class Vizify:
     """The engine for generating static PDF reports."""
     def __init__(self, file_path, output_prefix="Plots_Report", api_key=None, sample_size=None):
+        api_key = api_key or get_api_key()
         try:
             self.data = pd.read_csv(file_path, encoding="utf-8", on_bad_lines='skip')
         except FileNotFoundError:
@@ -1371,7 +1377,7 @@ print(predictions)
     # MAIN APP LAYOUT
     # ======================================================================
     st.session_state.setdefault("dashboard_items", [])
-    st.session_state.setdefault("api_key", "")
+    st.session_state.setdefault("api_key", get_api_key())
 
     # --- UX Improvements ---
     def setup_ux():
@@ -1738,7 +1744,7 @@ print(predictions)
         if "agent_chat_history" not in st.session_state:
             st.session_state.agent_chat_history = []
 
-        api_key = st.session_state.get("api_key") or os.getenv("GEMINI_API_KEY")
+        api_key = st.session_state.get("api_key") or get_api_key()
         if not api_key:
             st.warning("⚠️ Please enter your Gemini API Key in the sidebar to enable the AI Data Agent.")
             return
@@ -1929,7 +1935,7 @@ def run_pdf_generator_cli():
 
     api_key = None
     if input("Enable AI-powered interpretations? (yes/no): ").lower() in ['y', 'yes']:
-        api_key = os.getenv("GEMINI_API_KEY") or getpass.getpass("Please enter your Gemini API key: ")
+        api_key = get_api_key() or getpass.getpass("Please enter your Gemini API key: ")
         if not api_key:
             print("⚠️ No API key provided. Running in plots-only mode.")
 

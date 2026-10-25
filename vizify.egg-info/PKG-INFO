@@ -1,6 +1,6 @@
-Metadata-Version: 2.1
+Metadata-Version: 2.4
 Name: vizify
-Version: 0.5.0
+Version: 0.7.0
 Summary: An automated data visualization package
 Home-page: https://github.com/arun6832/vizify
 Author: Arun M
@@ -12,93 +12,198 @@ Classifier: Operating System :: OS Independent
 Requires-Python: >=3.7
 Description-Content-Type: text/markdown
 License-File: LICENSE.txt
+Requires-Dist: pandas
+Requires-Dist: openpyxl
+Requires-Dist: xlrd
+Requires-Dist: SQLAlchemy
+Requires-Dist: PyMySQL
+Requires-Dist: databricks-sql-connector[sqlalchemy]
+Requires-Dist: requests
+Requires-Dist: lxml
+Requires-Dist: flask-cors
+Requires-Dist: plotly
+Requires-Dist: google-genai
+Requires-Dist: scikit-learn
+Requires-Dist: reportlab
+Requires-Dist: fpdf2
+Requires-Dist: kaleido
+Requires-Dist: numpy
+Requires-Dist: seaborn
+Requires-Dist: matplotlib
+Requires-Dist: missingno
+Requires-Dist: wordcloud
+Requires-Dist: flask
+Provides-Extra: files
+Requires-Dist: pyarrow; extra == "files"
+Requires-Dist: pypdf; extra == "files"
+Provides-Extra: mysql
+Requires-Dist: PyMySQL; extra == "mysql"
+Provides-Extra: postgres
+Requires-Dist: psycopg[binary]; extra == "postgres"
+Provides-Extra: sqlserver
+Requires-Dist: pyodbc; extra == "sqlserver"
+Provides-Extra: oracle
+Requires-Dist: oracledb; extra == "oracle"
+Provides-Extra: db2
+Requires-Dist: ibm_db_sa; extra == "db2"
+Provides-Extra: databricks
+Requires-Dist: databricks-sql-connector[sqlalchemy]; extra == "databricks"
+Provides-Extra: connections
+Requires-Dist: PyMySQL; extra == "connections"
+Requires-Dist: psycopg[binary]; extra == "connections"
+Requires-Dist: pyodbc; extra == "connections"
+Requires-Dist: oracledb; extra == "connections"
+Requires-Dist: ibm_db_sa; extra == "connections"
+Requires-Dist: databricks-sql-connector[sqlalchemy]; extra == "connections"
+Provides-Extra: all
+Requires-Dist: pyarrow; extra == "all"
+Requires-Dist: pypdf; extra == "all"
+Requires-Dist: PyMySQL; extra == "all"
+Requires-Dist: psycopg[binary]; extra == "all"
+Requires-Dist: pyodbc; extra == "all"
+Requires-Dist: oracledb; extra == "all"
+Requires-Dist: ibm_db_sa; extra == "all"
+Requires-Dist: databricks-sql-connector[sqlalchemy]; extra == "all"
+Dynamic: author
+Dynamic: author-email
+Dynamic: classifier
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: home-page
+Dynamic: license
+Dynamic: license-file
+Dynamic: provides-extra
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary
 
-# Vizify: Automated Data Analysis, Visualization, and Machine Learning
+﻿# Vizify
 
-Vizify is a Python library designed to automate exploratory data analysis (EDA), statistical profiling, and predictive machine learning. It generates comprehensive static PDF reports with automated insights, serves a highly polished, interactive local web dashboard built with React and Flask, and integrates a conversational AI agent capable of writing and executing analysis code.
+Vizify is a Python data analysis library with a local interactive dashboard for exploring datasets, visualizing patterns, cleaning text, and training basic machine learning models.
 
----
+## Features
 
-## Core Capabilities
+- **Charts and themes:** D3-powered interactive charts with dark and light themes; Plotly is available for supported charts.
+- **Text analysis and cleaning:** word and n-gram frequencies, rule-based sentiment estimates, pattern extraction, TF-IDF terms, and configurable text cleaning.
+- **SQLite workspace:** imported datasets and query results are persisted locally for retrieval. CSV and SQL query results are ingested in chunks; table browsing is paginated.
+- **File sources:** CSV, TSV, TXT, Excel (`.xlsx`, `.xls`), JSON/JSONL, XML, PDF text, and Parquet.
+- **Database sources:** MySQL, PostgreSQL, SQL Server/Azure SQL, Oracle, IBM Db2, Databricks SQL Warehouse, and SQL Server ODBC. Imports are local snapshots.
+- **Online and web sources:** OData JSON feeds, GitHub repository data, and HTML tables from public web pages.
+- **Profiling and cleaning:** column summaries, missing values, filters, and a Magic Clean operation.
+- **Machine learning:** basic regression and classification training, evaluation, live predictions, and model export.
+- **Data Assistant:** optional Gemini-powered analysis. A valid Gemini API key is required.
 
-### 1. Automated Visual Diagnostics
-- **Descriptive Statistics**: Automatic computation of central tendency, spread, and missingness metrics.
-- **Correlation Heatmaps**: Interactive Pearson/Spearman correlation matrices for numerical attributes.
-- **Distribution Profiles**: Histograms, Kernel Density Estimators (KDE), and box plots displaying outliers.
-- **Categorical Analyses**: High-resolution bar charts, pie charts, and categorical stacked comparisons.
-- **Time-Series Outliers**: Temporal trend visualizations and automatic anomaly detection.
+The source picker also lists SharePoint, Salesforce, Dynamics 365, Google Analytics, Mailchimp, Microsoft Exchange, OLE DB, Active Directory, and R/Python scripts as planned integrations. They are marked unavailable in the UI until their authentication/driver workflows are implemented. DirectQuery is not currently supported; database connections import a snapshot into SQLite.
 
-### 2. High-Performance Local Dashboard Studio
-- **React + Flask SPA**: Served locally on a dynamically assigned free port, featuring a premium dark glassmorphism user interface.
-- **Global Slicers**: Dynamic sidebar panels to filter the entire workspace by date ranges, category groups, or numerical ranges.
-- **Interactive Visual Cards**: Native, client-side Plotly chart rendering for responsive data exploration.
-- **Magic Cleaner**: Single-click utility to prune highly vacant columns, format currency values, and parse datetime structures.
-
-### 3. No-Code Machine Learning Pipeline
-- **Problem Classification**: Automatic problem detection (Regression vs. Classification) based on target attributes.
-- **Advanced Preprocessing**: Scalers, categorical encoders, and missing value strategies (Mean/Median/KNN Imputation).
-- **Algorithm Comparisons**: Simultaneous training and benchmarking of 5+ models (Linear/Logistic Regression, Random Forest, Decision Trees, SVM, and KNN).
-- **Inference Playground**: Real-time What-If prediction sliders mapping features to instant model predictions.
-- **Model Exports**: Download trained model bundles as serialized `.pkl` binary files.
-
-### 4. Conversational AI Data Agent
-- **Inline Charting**: Ask questions in plain English; the agent generates Python code, runs it in a sandboxed environment, captures console outputs, and renders interactive Plotly figures inline.
-- **Per-Chart Intelligence**: Dedicated conversational interfaces below every card to interrogate specific data subsets.
-
----
-
-## Installation
-
-Install the package via pip:
+## Install
 
 ```bash
 pip install vizify
 ```
 
----
+Install optional file readers or database drivers with extras:
 
-## International Business Use Case: Multinational Supply Chain Optimization
+```bash
+pip install 'vizify[files]'       # Parquet and PDF readers
+pip install 'vizify[mysql]'       # MySQL driver
+pip install 'vizify[postgres]'    # PostgreSQL driver
+pip install 'vizify[sqlserver]'   # SQL Server ODBC driver (system ODBC driver also required)
+pip install 'vizify[oracle]'
+pip install 'vizify[db2]'
+pip install 'vizify[databricks]'
+pip install 'vizify[all]'         # all optional readers and database drivers
+```
 
-To demonstrate Vizify's capabilities, consider a multinational retailer analyzing its cross-border shipping delays and custom clearance times across Europe, North America, and Asia. The dataset (`supply_chain_logistics.csv`) contains logistics records including `Transit_Time_Days`, `Duty_Paid_USD`, `Shipping_Method`, `Destination_Continent`, and `Customs_Delay_Indicator` (0 for normal, 1 for delayed).
+If an existing installation reports `No module named 'pymysql'`, run `python -m pip install --upgrade 'vizify[mysql]'` in the same Python environment used to launch Vizify, then restart the dashboard.
 
-### 1. Generating a Static PDF Audit Report
-To quickly share static logistics diagnostics with the executive board:
+For development, install the Python dependencies and build the bundled dashboard:
+
+```bash
+pip install -r requirements.txt
+cd frontend
+npm install
+npm run build
+```
+
+The dashboard is bundled into `vizify/static` and served by the local Flask server.
+
+## Gemini API key
+
+Vizify checks for a key in this order:
+
+1. `GEMINI_API_KEY` environment variable.
+2. The path in `VIZIFY_API_KEY_FILE`, if set.
+3. A key entered in the dashboard sidebar for the current session.
+
+`API.key` is reserved for PyPI publishing and is never used as a Gemini key or included in the Python package. A PyPI token (`pypi-…`) is not a Gemini API key. Keep publishing tokens and API key files out of source control.
+
+PowerShell example:
+
+```powershell
+$env:GEMINI_API_KEY = "your-gemini-key"
+```
+
+## Launch the dashboard
 
 ```python
 from vizify import Vizify
 
-# Initialize Vizify with the logistics dataset and Gemini API credentials
-viz = Vizify("supply_chain_logistics.csv", api_key="YOUR_GEMINI_API_KEY")
-
-# Generate and save all visualizations with AI commentary into a PDF report
-viz.show_all_visualizations()
+Vizify.launch_dashboard("sales.csv")
 ```
-*Outputs: `Plots_Report.pdf` and `Plots_Report.html` containing visual summaries and automated insights.*
 
-### 2. Launching the Local Web Studio Dashboard
-For interactive data exploration and modeling, launch the Flask + React dashboard:
+Or pass a pandas dataframe:
+
+```python
+import pandas as pd
+from vizify import Vizify
+
+data = pd.read_excel("sales.xlsx")
+Vizify.launch_dashboard(df=data)
+```
+
+Use **Get data** in the dashboard to open the source picker. Pick a file, configure a database connection, or select an online/web source. Database credentials are used only for the import request and are not stored in the SQLite workspace. The loaded result is a snapshot; connect again to refresh it.
+
+## Database connection examples
+
+Choose the provider in **Get data → Databases**, enter its connection details, and provide a read-only `SELECT` query. Example:
+
+```sql
+SELECT region, order_date, amount
+FROM sales
+WHERE order_date >= '2025-01-01'
+```
+
+Databricks requires the workspace hostname, access token, and SQL warehouse HTTP path, with optional catalog and schema. MySQL, PostgreSQL, SQL Server, Oracle, and Db2 use their respective host, port, database, username, and password fields. SQL Server ODBC accepts a driver connection string.
+
+## SQLite workspace
+
+By default, Vizify stores the active dataset in:
+
+```text
+~/.vizify/workspace.sqlite3
+```
+
+Set `VIZIFY_DATA_DIR` to choose another directory. The active dataset is restored when the dashboard restarts. Table browsing and filtering use SQLite; full-data charting, text analysis, and model training load data into pandas as needed, so those operations still use memory proportional to the data being analyzed.
+
+The engine and NLP processor are also available directly:
+
+```python
+from vizify import SQLiteDataEngine, NLPProcessor
+
+engine = SQLiteDataEngine()
+metadata = engine.ingest_csv("sales.csv", filename="sales.csv")
+page = engine.get_paginated_data(page=1, limit=50)
+```
+
+## Python report example
 
 ```python
 from vizify import Vizify
 
-# Start the local server and open the browser automatically
-Vizify.launch_dashboard("supply_chain_logistics.csv")
+report = Vizify("sales.csv", api_key=None)  # Uses configured Gemini key when available
+report.show_all_visualizations()
 ```
 
-Within the local dashboard, you can:
-- **Filter Regions**: Use the sidebar global filters to restrict metrics exclusively to `Destination_Continent = 'Europe'`.
-- **Magic Clean**: Convert unformatted currency columns (`Duty_Paid_USD` containing '$' or commas) to clean floats.
-- **Train a Delay Predictor**: Navigate to the ML Studio tab, select `Customs_Delay_Indicator` as the classification target, select input variables, check the Random Forest classifier, and run training. Evaluate the confusion matrix and adjust transit sliders in the What-If Playground to simulate delay probabilities.
-- **Interrogate the Data Agent**: Go to the AI Data Agent tab and enter: *"Plot the average transit time by shipping method for Europe as a bar chart and describe the insights."* The agent writes the code, runs the analysis, and displays the interactive chart.
+## Package contents
 
----
-
-## Technical Dependencies
-
-Vizify relies on the following standard libraries:
-- **Data Engineering**: `pandas`, `numpy`
-- **Visualization**: `matplotlib`, `seaborn`, `plotly`
-- **Machine Learning**: `scikit-learn`
-- **PDF Generation**: `reportlab`, `fpdf2`
-- **Local Server**: `flask`
-- **GenAI Engine**: `google-genai`
+The Python distribution contains the dashboard frontend build under `vizify/static`. It does not contain local datasets, SQLite workspaces, or API key files.

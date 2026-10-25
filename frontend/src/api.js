@@ -1,12 +1,22 @@
 const API_BASE = window.location.port === '5173' ? 'http://localhost:5000' : '';
 
-export async function request(endpoint, options = {}) {
+export async function request(endpoint, options = {}, data = null) {
+  let fetchOptions = {};
+  if (typeof options === 'string') {
+    fetchOptions = {
+      method: options,
+      body: data ? JSON.stringify(data) : undefined
+    };
+  } else {
+    fetchOptions = options;
+  }
+
   const url = `${API_BASE}${endpoint}`;
   const response = await fetch(url, {
-    ...options,
+    ...fetchOptions,
     headers: {
       'Content-Type': 'application/json',
-      ...options.headers,
+      ...fetchOptions.headers,
     },
   });
   

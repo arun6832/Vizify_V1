@@ -3,32 +3,36 @@ import Plotly from 'plotly.js-dist-min';
 
 export default function Plot({ data, layout, style, config }) {
   const containerRef = useRef(null);
+  const theme = document.documentElement.dataset.theme || 'dark';
 
   useEffect(() => {
     if (!containerRef.current || !data) return;
 
-    // Apply dark-theme standards to Plotly figures
+    const light = theme === 'light';
+    const textColor = light ? '#526078' : '#a8b4c7';
+    const gridColor = light ? 'rgba(82, 96, 120, 0.14)' : 'rgba(255,255,255,0.06)';
     const responsiveLayout = {
       ...layout,
       paper_bgcolor: 'transparent',
       plot_bgcolor: 'transparent',
-      font: { 
-        color: '#94a3b8', 
-        family: "'Inter', system-ui, sans-serif" 
-      },
+      font: { color: textColor, family: "'DM Sans', system-ui, sans-serif" },
       grid: {
-        color: 'rgba(255,255,255,0.05)'
+        color: gridColor
       },
       xaxis: {
-        gridcolor: 'rgba(255, 255, 255, 0.05)',
-        zerolinecolor: 'rgba(255, 255, 255, 0.08)',
-        linecolor: 'rgba(255, 255, 255, 0.08)',
+        gridcolor: gridColor,
+        zerolinecolor: gridColor,
+        linecolor: gridColor,
+        tickfont: { color: textColor },
+        title: { font: { color: textColor } },
         ...layout?.xaxis
       },
       yaxis: {
-        gridcolor: 'rgba(255, 255, 255, 0.05)',
-        zerolinecolor: 'rgba(255, 255, 255, 0.08)',
-        linecolor: 'rgba(255, 255, 255, 0.08)',
+        gridcolor: gridColor,
+        zerolinecolor: gridColor,
+        linecolor: gridColor,
+        tickfont: { color: textColor },
+        title: { font: { color: textColor } },
         ...layout?.yaxis
       },
       margin: { t: 40, r: 20, b: 40, l: 50, ...layout?.margin }
@@ -55,7 +59,7 @@ export default function Plot({ data, layout, style, config }) {
         Plotly.purge(containerRef.current);
       }
     };
-  }, [data, layout, config]);
+  }, [data, layout, config, theme]);
 
   return (
     <div 

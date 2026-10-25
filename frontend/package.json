@@ -10,6 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "d3": "^7.9.0",
     "framer-motion": "^12.42.2",
     "lucide-react": "^1.24.0",
     "plotly.js-dist-min": "^3.7.0",

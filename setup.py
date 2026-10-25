@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="vizify",
-    version="0.5.0",
+    version="0.7.0",
     author="Arun M",
     author_email="arunpappulli@gmail.com",
     description="An automated data visualization package",
@@ -12,6 +12,20 @@ setup(
     packages=find_packages(),
     install_requires=[
         "pandas",
+        "openpyxl",
+        "xlrd",
+        "SQLAlchemy",
+        "PyMySQL",
+        "databricks-sql-connector[sqlalchemy]",
+        "requests",
+        "lxml",
+        "flask-cors",
+        "plotly",
+        "google-genai",
+        "scikit-learn",
+        "reportlab",
+        "fpdf2",
+        "kaleido",
         "numpy",
         "seaborn",
         "matplotlib",
@@ -19,6 +33,17 @@ setup(
         "wordcloud",
         "flask"
     ],
+    extras_require={
+        "files": ["pyarrow", "pypdf"],
+        "mysql": ["PyMySQL"],
+        "postgres": ["psycopg[binary]"],
+        "sqlserver": ["pyodbc"],
+        "oracle": ["oracledb"],
+        "db2": ["ibm_db_sa"],
+        "databricks": ["databricks-sql-connector[sqlalchemy]"],
+        "connections": ["PyMySQL", "psycopg[binary]", "pyodbc", "oracledb", "ibm_db_sa", "databricks-sql-connector[sqlalchemy]"],
+        "all": ["pyarrow", "pypdf", "PyMySQL", "psycopg[binary]", "pyodbc", "oracledb", "ibm_db_sa", "databricks-sql-connector[sqlalchemy]"],
+    },
     include_package_data=True,
     package_data={
         "vizify": ["static/*", "static/assets/*"]

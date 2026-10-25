@@ -2,6 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { Trash2, MessageSquare, BrainCircuit, Send, Sparkles } from 'lucide-react';
 import { request } from '../api';
 import Plot from './Plot';
+import D3WordCloud from './d3/D3WordCloud';
+import D3ForceGraph from './d3/D3ForceGraph';
+import D3ChartSuite from './d3/D3ChartSuite';
 
 export default function DataExplorer({
   dashboardItems,
@@ -31,19 +34,15 @@ export default function DataExplorer({
     dashboardItems.forEach(item => {
       if (!nextSettings[item.id]) {
         changed = true;
-        if (item.type === 'Distribution Plot') {
-          nextSettings[item.id] = { column: dataInfo.numeric_cols?.[0] || '' };
-        } else if (item.type === 'Categorical Plot') {
-          nextSettings[item.id] = { column: dataInfo.categorical_cols?.[0] || '' };
-        } else if (item.type === 'Scatter Plot') {
-          nextSettings[item.id] = {
-            xAxis: dataInfo.numeric_cols?.[0] || '',
-            yAxis: dataInfo.numeric_cols?.[1] || dataInfo.numeric_cols?.[0] || '',
-            color: '(none)'
-          };
-        } else if (item.type === 'Text-to-Chart (AI)') {
-          nextSettings[item.id] = { prompt: '' };
-        }
+        const defaultCol = dataInfo.columns?.[0] || '';
+        const defaultNum = dataInfo.numeric_cols?.[0] || defaultCol;
+        nextSettings[item.id] = {
+          column: defaultCol,
+          xAxis: defaultCol,
+          yAxis: defaultNum,
+          color: '(none)',
+          prompt: ''
+        };
       }
     });
 
@@ -251,74 +250,7 @@ export default function DataExplorer({
 
                 {/* Chart Settings Controls */}
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.75rem', background: 'rgba(255,255,255,0.01)', padding: '0.75rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
-                  {item.type === 'Distribution Plot' && (
-                    <div>
-                      <label>Numeric Column</label>
-                      <select 
-                        value={settings.column || ''}
-                        onChange={(e) => handleSettingChange(item.id, 'column', e.target.value)}
-                      >
-                        {dataInfo.numeric_cols?.map(col => (
-                          <option key={col} value={col}>{col}</option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-
-                  {item.type === 'Categorical Plot' && (
-                    <div>
-                      <label>Categorical Column</label>
-                      <select 
-                        value={settings.column || ''}
-                        onChange={(e) => handleSettingChange(item.id, 'column', e.target.value)}
-                      >
-                        {dataInfo.categorical_cols?.map(col => (
-                          <option key={col} value={col}>{col}</option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-
-                  {item.type === 'Scatter Plot' && (
-                    <>
-                      <div>
-                        <label>X Axis (Numeric)</label>
-                        <select 
-                          value={settings.xAxis || ''}
-                          onChange={(e) => handleSettingChange(item.id, 'xAxis', e.target.value)}
-                        >
-                          {dataInfo.numeric_cols?.map(col => (
-                            <option key={col} value={col}>{col}</option>
-                          ))}
-                        </select>
-                      </div>
-                      <div>
-                        <label>Y Axis (Numeric)</label>
-                        <select 
-                          value={settings.yAxis || ''}
-                          onChange={(e) => handleSettingChange(item.id, 'yAxis', e.target.value)}
-                        >
-                          {dataInfo.numeric_cols?.map(col => (
-                            <option key={col} value={col}>{col}</option>
-                          ))}
-                        </select>
-                      </div>
-                      <div>
-                        <label>Color Coding (Category)</label>
-                        <select 
-                          value={settings.color || '(none)'}
-                          onChange={(e) => handleSettingChange(item.id, 'color', e.target.value)}
-                        >
-                          <option value="(none)">(none)</option>
-                          {dataInfo.categorical_cols?.map(col => (
-                            <option key={col} value={col}>{col}</option>
-                          ))}
-                        </select>
-                      </div>
-                    </>
-                  )}
-
-                  {item.type === 'Text-to-Chart (AI)' && (
+                  {item.type === 'Text-to-Chart (AI)' ? (
                     <div style={{ gridColumn: '1 / -1', display: 'flex', gap: '0.5rem' }}>
                       <input 
                         type="text" 
@@ -337,17 +269,64 @@ export default function DataExplorer({
                         Generate
                       </button>
                     </div>
-                  )}
-
-                  {item.type === 'Correlation Heatmap' && (
+                  ) : item.type === 'Correlation Heatmap' ? (
                     <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                      Renders correlations across all numerical attributes. Sliced automatically by global filters.
+                      Renders correlation matrix across all numerical attributes. Sliced automatically by global filters.
                     </div>
+                  ) : ['pie', 'doughnut', 'donut', 'count', 'categorical', 'histo', 'distribution', 'treemap', 'sunburst', 'funnel'].some(k => (item.type || '').toLowerCase().includes(k)) ? (
+                    <div>
+                      <label>Target Category / Variable</label>
+                      <select 
+                        value={settings.column || dataInfo.columns?.[0] || ''}
+                        onChange={(e) => handleSettingChange(item.id, 'column', e.target.value)}
+                      >
+                        {dataInfo.columns?.map(col => (
+                          <option key={col} value={col}>{col}</option>
+                        ))}
+                      </select>
+                    </div>
+                  ) : (
+                    <>
+                      <div>
+                        <label>X Axis</label>
+                        <select 
+                          value={settings.xAxis || dataInfo.columns?.[0] || ''}
+                          onChange={(e) => handleSettingChange(item.id, 'xAxis', e.target.value)}
+                        >
+                          {dataInfo.columns?.map(col => (
+                            <option key={col} value={col}>{col}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label>Y Axis / Measure</label>
+                        <select 
+                          value={settings.yAxis || dataInfo.numeric_cols?.[0] || dataInfo.columns?.[0] || ''}
+                          onChange={(e) => handleSettingChange(item.id, 'yAxis', e.target.value)}
+                        >
+                          {dataInfo.columns?.map(col => (
+                            <option key={col} value={col}>{col}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label>Group / Color</label>
+                        <select 
+                          value={settings.color || '(none)'}
+                          onChange={(e) => handleSettingChange(item.id, 'color', e.target.value)}
+                        >
+                          <option value="(none)">(none)</option>
+                          {dataInfo.columns?.map(col => (
+                            <option key={col} value={col}>{col}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </>
                   )}
                 </div>
 
                 {/* Plot Panel */}
-                <div style={{ position: 'relative', minHeight: '300px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <div style={{ position: 'relative', minHeight: '320px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                   {loading && (
                     <div style={{ position: 'absolute', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem' }}>
                       <div className="spinner"></div>
@@ -359,12 +338,32 @@ export default function DataExplorer({
                       ⚠️ {error}
                     </div>
                   )}
-                  {!loading && !error && chartData && (
-                    <Plot 
-                      data={chartData.data} 
-                      layout={chartData.layout} 
-                      style={{ height: item.type === 'Correlation Heatmap' || item.type === 'Scatter Plot' ? '450px' : '350px' }}
+                  {!loading && !error && item.type === 'D3 Word Cloud' && (
+                    <D3WordCloud 
+                      data={chartData?.wordcloud || []}
+                      width={550} 
+                      height={350} 
                     />
+                  )}
+                  {!loading && !error && item.type === 'D3 Force Co-Occurrence Net' && (
+                    <D3ForceGraph 
+                      data={chartData?.network || { nodes: [], links: [] }}
+                      width={550} 
+                      height={350} 
+                    />
+                  )}
+                  {!loading && !error && chartData && item.type !== 'D3 Word Cloud' && item.type !== 'D3 Force Co-Occurrence Net' && (
+                    <div style={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                      <D3ChartSuite type={item.type} data={chartData.d3Data} width={560} height={340} />
+                      <details style={{ marginTop: '0.5rem', width: '100%' }}>
+                        <summary style={{ cursor: 'pointer', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>Toggle Plotly View</summary>
+                        <Plot 
+                          data={chartData.data || []} 
+                          layout={chartData.layout || {}} 
+                          style={{ height: '350px', width: '100%' }}
+                        />
+                      </details>
+                    </div>
                   )}
                 </div>
 

@@ -1,18 +1,20 @@
 import React, { useState } from 'react';
+import DataSourceDialog from './DataSourceDialog';
 import { 
   Database, 
-  Sparkles, 
+  Sparkles,
+  Sun,
+  Moon,
   Cpu, 
   MessageSquare, 
-  Upload, 
   Plus, 
   Filter, 
   ChevronDown, 
   ChevronUp, 
   Eye, 
-  EyeOff 
+  EyeOff,
+  Type 
 } from 'lucide-react';
-import { request } from '../api';
 
 export default function Sidebar({
   activeTab,
@@ -23,53 +25,24 @@ export default function Sidebar({
   setDataInfo,
   api_key,
   setApiKey,
-  selectedModel,
-  setSelectedModel,
   onAddChart,
   globalFilters,
   setGlobalFilters,
-  chartTypes
+  chartTypes,
+  theme,
+  onToggleTheme
 }) {
   const [showApiKey, setShowApiKey] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [sourceOpen, setSourceOpen] = useState(false);
   const [selectedChartType, setSelectedChartType] = useState('Distribution Plot');
 
-  const handleFileUpload = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-
-    setUploading(true);
-    const formData = new FormData();
-    formData.append('file', file);
-
-    try {
-      const response = await fetch(
-        `${window.location.port === '5173' ? 'http://localhost:5000' : ''}/api/upload`,
-        {
-          method: 'POST',
-          body: formData,
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error('Upload failed');
-      }
-
-      const info = await response.json();
-      setDataInfo(info);
-      setFileLoaded(true);
-      // Reset filters when a new file is uploaded
-      setGlobalFilters({
-        categorical: {},
-        numeric: {},
-        datetime: {}
-      });
-    } catch (err) {
-      alert(`Error uploading file: ${err.message}`);
-    } finally {
-      setUploading(false);
-    }
+  const handleSourceConnected = (info) => {
+    setDataInfo(info);
+    setFileLoaded(true);
+    setGlobalFilters({ categorical: {}, numeric: {}, datetime: {} });
+    setSourceOpen(false);
   };
 
   const updateNumericFilter = (col, valIdx, value) => {
@@ -120,46 +93,37 @@ export default function Sidebar({
     });
   };
 
-  return (
+  return <>
     <aside className="sidebar">
       {/* Title */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '2rem' }}>
-        <Sparkles size={28} className="glow-text-primary" style={{ color: 'var(--accent-primary)' }} />
+      <div className="brand-row">
+        <div className="brand-mark"><Sparkles size={20} /></div>
         <div>
-          <h1 style={{ fontSize: '1.5rem', fontWeight: 800, letterSpacing: '-0.02em' }} className="glow-text-primary">
-            Vizify AI
-          </h1>
-          <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 600 }}>v0.5.0</span>
+          <h1 className="brand-name">Vizify</h1>
+          <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 600 }}>v0.7.0</span>
         </div>
+        <button type="button" className="theme-toggle" onClick={onToggleTheme} title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}>
+          {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
+        </button>
       </div>
 
       {/* Upload & Setup */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', marginBottom: '1.5rem' }}>
+      <div className="source-panel">
         <div>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Database size={16} /> 1) Data Source
+          <label className="eyebrow" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <Database size={15} /> DATA
           </label>
-          <div style={{ position: 'relative' }}>
-            <label className="btn" style={{ width: '100%', justifyContent: 'center', display: 'flex', cursor: 'pointer', gap: '0.5rem' }}>
-              <Upload size={16} /> {uploading ? 'Uploading...' : fileLoaded ? 'Change CSV File' : 'Upload CSV File'}
-              <input 
-                type="file" 
-                accept=".csv" 
-                onChange={handleFileUpload} 
-                style={{ display: 'none' }} 
-              />
-            </label>
-            {fileLoaded && (
-              <div style={{ fontSize: '0.75rem', color: 'var(--accent-green)', marginTop: '0.5rem', textAlign: 'center', fontWeight: 500 }}>
-                Active: {dataInfo.filename} ({dataInfo.shape[0]} rows)
-              </div>
-            )}
-          </div>
+          <button type="button" className="source-open-button" onClick={() => setSourceOpen(true)}>
+            <span className="source-button-icon"><Database size={18} /></span>
+            <span><strong>{uploading ? 'Importing data…' : 'Get data'}</strong><small>Files, databases & services</small></span>
+            <span className="source-button-arrow">↗</span>
+          </button>
+          {fileLoaded && <div className="active-dataset"><span className="status-dot" /> <span className="active-dataset-text">{dataInfo.filename}</span><small>{dataInfo.shape?.[0]?.toLocaleString()} rows</small></div>}
         </div>
 
         {/* API Key */}
         <div>
-          <label>2) Gemini API Key (Optional)</label>
+              <label>Gemini API Key (Optional)</label>
           <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
             <input
               type={showApiKey ? 'text' : 'password'}
@@ -209,6 +173,13 @@ export default function Sidebar({
               <span>Data Profiler</span>
             </li>
             <li 
+              className={`nav-item ${activeTab === 'nlp' ? 'active' : ''}`}
+              onClick={() => setActiveTab('nlp')}
+            >
+              <Type size={18} />
+              <span>NLP & Text Studio</span>
+            </li>
+            <li 
               className={`nav-item ${activeTab === 'ml' ? 'active' : ''}`}
               onClick={() => setActiveTab('ml')}
             >
@@ -220,7 +191,7 @@ export default function Sidebar({
               onClick={() => setActiveTab('agent')}
             >
               <MessageSquare size={18} />
-              <span>AI Data Agent</span>
+              <span>Data Assistant</span>
             </li>
           </ul>
 
@@ -361,5 +332,12 @@ export default function Sidebar({
         </div>
       )}
     </aside>
-  );
+    <DataSourceDialog
+      open={sourceOpen}
+      onClose={() => setSourceOpen(false)}
+      onConnected={handleSourceConnected}
+      onImportStart={() => setUploading(true)}
+      onImportEnd={() => setUploading(false)}
+    />
+  </>;
 }

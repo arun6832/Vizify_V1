@@ -3,10 +3,14 @@ import sys
 import io
 import time
 import socket
+import re
 import webbrowser
 import pickle
 import json
 import traceback
+import ipaddress
+import socket
+from urllib.parse import urlparse, urljoin
 from datetime import datetime
 from flask import Flask, request, jsonify, send_from_directory, send_file
 from flask_cors import CORS
@@ -48,6 +52,16 @@ except ImportError:
     REPORTLAB_AVAILABLE = False
 
 
+# Vizify Engine Imports
+try:
+    from vizify.engine import SQLiteDataEngine, NLPProcessor
+    from vizify.config import get_api_key
+except ImportError:
+    from engine import SQLiteDataEngine, NLPProcessor
+    from config import get_api_key
+
+SQLITE_ENGINE = SQLiteDataEngine()
+
 app = Flask(__name__, static_folder='static', static_url_path='')
 CORS(app)  # Enable CORS for development cross-origin requests
 
@@ -58,7 +72,19 @@ ACTIVE_DATA = {
     'filename': None,
 }
 
+def restore_active_data():
+    """Restore lightweight dataset state; data rows remain in SQLite."""
+    if SQLITE_ENGINE.has_dataset():
+        ACTIVE_DATA['filename'] = SQLITE_ENGINE.filename
+
+def get_active_dataframe():
+    """Load rows from SQLite on demand instead of retaining the dataset globally."""
+    if SQLITE_ENGINE.has_dataset():
+        return SQLITE_ENGINE.get_dataframe(limit=None)
+    return ACTIVE_DATA['df_cleaned'] if ACTIVE_DATA['df_cleaned'] is not None else ACTIVE_DATA['df_raw']
+
 ACTIVE_MODELS = {}  # Stores trained models: { key_prefix: { model_name: { 'model': obj, 'scaler': obj, ... } } }
+
 
 # --- Helper: Dynamic Free Port Finder ---
 def find_free_port(start_port=5000):
@@ -182,14 +208,14 @@ def index():
 
 @app.route('/api/init', methods=['GET'])
 def api_init():
-    file_loaded = ACTIVE_DATA['df_raw'] is not None
+    restore_active_data()
+    file_loaded = SQLITE_ENGINE.has_dataset() or ACTIVE_DATA['df_raw'] is not None
     info = {}
     if file_loaded:
-        df = ACTIVE_DATA['df_cleaned'] if ACTIVE_DATA['df_cleaned'] is not None else ACTIVE_DATA['df_raw']
-        info = get_dataset_metadata(df, ACTIVE_DATA['filename'])
+        info = SQLITE_ENGINE.get_metadata() if SQLITE_ENGINE.has_dataset() else get_dataset_metadata(ACTIVE_DATA['df_raw'], ACTIVE_DATA['filename'])
         
     return jsonify({
-        'api_key': os.getenv('GEMINI_API_KEY', ''),
+        'api_key': get_api_key(),
         'file_loaded': file_loaded,
         'info': info
     })
@@ -203,22 +229,261 @@ def api_upload():
         return jsonify({'error': 'No selected file'}), 400
         
     try:
-        df = pd.read_csv(file, encoding='utf-8', on_bad_lines='skip')
-        ACTIVE_DATA['df_raw'] = df
-        ACTIVE_DATA['df_cleaned'] = None
-        
-        # Sanitize filename to only show base name
         sanitized_filename = os.path.basename(file.filename)
+        extension = os.path.splitext(sanitized_filename)[1].lower()
+        if extension == '.csv':
+            info = SQLITE_ENGINE.ingest_csv(file, filename=sanitized_filename)
+        elif extension in ('.xlsx', '.xls', '.tsv', '.txt', '.json', '.jsonl', '.xml', '.pdf', '.parquet'):
+            df = read_uploaded_dataframe(file, extension)
+            info = SQLITE_ENGINE.ingest_dataframe(df, filename=sanitized_filename)
+        else:
+            return jsonify({'error': 'Supported files: CSV, TSV, TXT, Excel, JSON, XML, PDF, and Parquet'}), 400
+
         ACTIVE_DATA['filename'] = sanitized_filename
         
-        info = get_dataset_metadata(df, sanitized_filename)
         return jsonify(info)
     except Exception as e:
+        if isinstance(e, ImportError):
+            return jsonify({'error': 'This file format needs an optional reader. Install it with `pip install vizify[files]`, then restart Vizify.'}), 400
         return jsonify({'error': str(e)}), 500
+
+def read_uploaded_dataframe(file, extension):
+    """Read supported local file formats into a table-shaped dataframe."""
+    if extension in ('.xlsx', '.xls'):
+        return pd.read_excel(file)
+    if extension == '.tsv':
+        return pd.read_csv(file, sep='\t')
+    if extension == '.txt':
+        content = file.read().decode('utf-8-sig', errors='replace')
+        return pd.DataFrame({'text': content.splitlines()})
+    if extension == '.jsonl':
+        return pd.read_json(file, lines=True)
+    if extension == '.json':
+        try:
+            return pd.read_json(file)
+        except ValueError:
+            file.seek(0)
+            value = json.load(file)
+            return pd.json_normalize(value if isinstance(value, list) else value.get('data', value))
+    if extension == '.xml':
+        return pd.read_xml(file)
+    if extension == '.parquet':
+        return pd.read_parquet(file)
+    if extension == '.pdf':
+        try:
+            from pypdf import PdfReader
+        except ImportError as exc:
+            raise RuntimeError("PDF import needs pypdf. Install it with `pip install vizify[files]`.") from exc
+        reader = PdfReader(file)
+        return pd.DataFrame([{'page': i + 1, 'text': page.extract_text() or ''} for i, page in enumerate(reader.pages)])
+    raise ValueError(f"Unsupported file type: {extension}")
+
+def connector_install_hint(provider):
+    extras = {
+        'mysql': 'mysql', 'postgresql': 'postgres', 'sqlserver': 'sqlserver',
+        'azuresql': 'sqlserver', 'oracle': 'oracle', 'ibmdb2': 'db2',
+        'databricks': 'databricks', 'odbc': 'sqlserver'
+    }
+    extra = extras.get(provider, 'connections')
+    return f"The {provider} driver is missing. Install it with `pip install 'vizify[{extra}]'`, then restart Vizify."
+
+def require_public_https_url(url):
+    parsed = urlparse(url)
+    if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError('Use a public HTTPS URL without embedded credentials.')
+    try:
+        addresses = {item[4][0] for item in socket.getaddrinfo(parsed.hostname, 443, type=socket.SOCK_STREAM)}
+    except OSError as exc:
+        raise ValueError('The HTTPS host could not be resolved.') from exc
+    if not addresses or any(not ipaddress.ip_address(address).is_global for address in addresses):
+        raise ValueError('The URL must resolve only to public internet addresses.')
+    return parsed
+
+def get_public_response(url, headers=None, max_redirects=4):
+    import requests
+    current = url
+    for _ in range(max_redirects + 1):
+        require_public_https_url(current)
+        response = requests.get(current, headers=headers or {}, timeout=(5, 30), allow_redirects=False)
+        if response.is_redirect:
+            location = response.headers.get('Location')
+            if not location:
+                raise ValueError('The source returned an invalid redirect.')
+            current = urljoin(current, location)
+            continue
+        response.raise_for_status()
+        return response
+    raise ValueError('The source redirected too many times.')
+
+@app.route('/api/connect/database', methods=['POST'])
+def api_connect_database():
+    """Connect to MySQL or Databricks, import a read-only query into local SQLite."""
+    body = request.json or {}
+    provider = (body.get('provider') or '').lower()
+    query = (body.get('query') or '').strip()
+    if not query or not query.lower().startswith(('select ', 'with ')):
+        return jsonify({'error': 'Provide a SELECT query to import data'}), 400
+    try:
+        from sqlalchemy.engine import URL
+        source_names = {
+            'mysql': 'MySQL', 'postgresql': 'PostgreSQL', 'sqlserver': 'SQL Server',
+            'azuresql': 'Azure SQL', 'oracle': 'Oracle', 'ibmdb2': 'IBM Db2', 'odbc': 'ODBC'
+        }
+        if provider in source_names:
+            drivers = {
+                'mysql': 'mysql+pymysql', 'postgresql': 'postgresql+psycopg',
+                'sqlserver': 'mssql+pyodbc', 'azuresql': 'mssql+pyodbc',
+                'oracle': 'oracle+oracledb', 'ibmdb2': 'db2+ibm_db'
+            }
+            if provider == 'odbc':
+                url = URL.create('mssql+pyodbc', query={'odbc_connect': body.get('host', '')})
+            else:
+                query_options = {}
+                if provider in ('sqlserver', 'azuresql'):
+                    query_options = {'driver': body.get('driver') or 'ODBC Driver 18 for SQL Server', 'TrustServerCertificate': 'yes'}
+                url = URL.create(drivers[provider], username=body.get('username') or None,
+                    password=body.get('password') or None, host=body.get('host'),
+                    port=int(body.get('port')) if body.get('port') else None,
+                    database=body.get('database'), query=query_options or None)
+            source_name = f"{source_names[provider]}: {body.get('database') or body.get('host')}"
+        elif provider == 'databricks':
+            hostname = (body.get('host') or '').replace('https://', '').strip('/')
+            url = URL.create('databricks', username='token', password=body.get('token'),
+                host=hostname, query={
+                    'http_path': body.get('http_path', ''),
+                    'catalog': body.get('catalog', ''),
+                    'schema': body.get('schema', '')
+                })
+            source_name = f"Databricks: {body.get('catalog') or hostname}"
+        else:
+            return jsonify({'error': 'Choose a supported database connector.'}), 400
+        info = SQLITE_ENGINE.ingest_sqlalchemy(str(url), query, filename=source_name)
+        ACTIVE_DATA.update({'df_raw': None, 'df_cleaned': None, 'filename': source_name})
+        return jsonify(info)
+    except ModuleNotFoundError:
+        return jsonify({'error': connector_install_hint(provider)}), 400
+    except ImportError:
+        return jsonify({'error': connector_install_hint(provider)}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
+@app.route('/api/connect/odata', methods=['POST'])
+def api_connect_odata():
+    body = request.json or {}
+    try:
+        headers = {'Authorization': f"Bearer {body['token']}"} if body.get('token') else {}
+        response = get_public_response(body.get('url', ''), headers=headers)
+        payload = response.json()
+        rows = payload.get('value', payload.get('results', payload)) if isinstance(payload, dict) else payload
+        if not isinstance(rows, list) or not rows:
+            return jsonify({'error': 'The OData endpoint returned no tabular records.'}), 400
+        info = SQLITE_ENGINE.ingest_dataframe(pd.json_normalize(rows), filename='OData import')
+        ACTIVE_DATA.update({'df_raw': None, 'df_cleaned': None, 'filename': 'OData import'})
+        return jsonify(info)
+    except Exception as e:
+        return jsonify({'error': f"OData import failed: {e}"}), 400
+
+@app.route('/api/connect/github', methods=['POST'])
+def api_connect_github():
+    body = request.json or {}
+    repo = (body.get('repository') or '').strip()
+    resource = body.get('resource', 'issues')
+    if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repo) or resource not in {'issues', 'pulls', 'commits', 'releases'}:
+        return jsonify({'error': 'Enter a repository as owner/name and choose a supported GitHub resource.'}), 400
+    try:
+        headers = {'Accept': 'application/vnd.github+json'}
+        if body.get('token'):
+            headers['Authorization'] = f"Bearer {body['token']}"
+        response = get_public_response(f'https://api.github.com/repos/{repo}/{resource}?per_page=100', headers=headers)
+        rows = response.json()
+        if not isinstance(rows, list) or not rows:
+            return jsonify({'error': 'GitHub returned no records for that resource.'}), 400
+        info = SQLITE_ENGINE.ingest_dataframe(pd.json_normalize(rows, sep='_'), filename=f"GitHub: {repo} / {resource}")
+        ACTIVE_DATA.update({'df_raw': None, 'df_cleaned': None, 'filename': f"GitHub: {repo} / {resource}"})
+        return jsonify(info)
+    except Exception as e:
+        return jsonify({'error': f"GitHub import failed: {e}"}), 400
+
+@app.route('/api/connect/web', methods=['POST'])
+def api_connect_web():
+    body = request.json or {}
+    try:
+        response = get_public_response(body.get('url', ''), headers={'User-Agent': 'Vizify/0.7 data-import'})
+        from io import StringIO
+        tables = pd.read_html(StringIO(response.text))
+        if not tables:
+            return jsonify({'error': 'No HTML tables were found on this page.'}), 400
+        info = SQLITE_ENGINE.ingest_dataframe(tables[0], filename=f"Web table: {urlparse(body['url']).hostname}")
+        ACTIVE_DATA.update({'df_raw': None, 'df_cleaned': None, 'filename': info.get('filename')})
+        return jsonify(info)
+    except Exception as e:
+        return jsonify({'error': f"Web table import failed: {e}"}), 400
+
+# --- SQLite Paginated Data Route ---
+@app.route('/api/data/page', methods=['POST'])
+def api_data_page():
+    body = request.json or {}
+    page = body.get('page', 1)
+    limit = body.get('limit', 50)
+    filters = body.get('filters', {})
+    result = SQLITE_ENGINE.get_paginated_data(page=page, limit=limit, filters=filters)
+    return jsonify(result)
+
+# --- NLP & Text Analysis Routes ---
+@app.route('/api/nlp/text-columns', methods=['GET'])
+def api_nlp_columns():
+    df = get_active_dataframe()
+    if df is None:
+        return jsonify({'text_columns': []})
+    text_cols = NLPProcessor.detect_text_columns(df)
+    return jsonify({'text_columns': text_cols})
+
+@app.route('/api/nlp/analyze', methods=['POST'])
+def api_nlp_analyze():
+    df = get_active_dataframe()
+    if df is None:
+        return jsonify({'error': 'No dataset loaded'}), 400
+    body = request.json or {}
+    col = body.get('column')
+    if not col:
+        text_cols = NLPProcessor.detect_text_columns(df)
+        if not text_cols:
+            return jsonify({'error': 'No text columns found in dataset'}), 400
+        col = text_cols[0]
+        
+    result = NLPProcessor.analyze_text(df, col)
+    return jsonify(result)
+
+@app.route('/api/nlp/clean', methods=['POST'])
+def api_nlp_clean():
+    df = get_active_dataframe()
+    if df is None:
+        return jsonify({'error': 'No dataset loaded'}), 400
+    body = request.json or {}
+    col = body.get('column')
+    options = body.get('options', {})
+    
+    if not col or col not in df.columns:
+        return jsonify({'error': f"Invalid column '{col}'"}), 400
+        
+    df_temp = df.copy()
+    cleaned_series = NLPProcessor.clean_text_series(df_temp[col], options)
+    df_temp[col] = cleaned_series
+    
+    ACTIVE_DATA['df_cleaned'] = df_temp
+    SQLITE_ENGINE.update_table_data(df_temp)
+    info = SQLITE_ENGINE.get_metadata()
+    
+    return jsonify({
+        'message': f"Text cleaning applied to '{col}' successfully",
+        'info': info,
+        'sample_cleaned': cleaned_series.head(10).tolist()
+    })
+
 
 @app.route('/api/magic-clean', methods=['POST'])
 def api_magic_clean():
-    df = ACTIVE_DATA['df_raw']
+    df = get_active_dataframe()
     if df is None:
         return jsonify({'error': 'No dataset loaded'}), 400
         
@@ -242,6 +507,7 @@ def api_magic_clean():
                     pass
                     
         ACTIVE_DATA['df_cleaned'] = df_temp
+        SQLITE_ENGINE.update_table_data(df_temp)
         info = get_dataset_metadata(df_temp, ACTIVE_DATA['filename'])
         
         return jsonify({
@@ -253,71 +519,150 @@ def api_magic_clean():
 
 @app.route('/api/get-chart', methods=['POST'])
 def api_get_chart():
-    df = ACTIVE_DATA['df_cleaned'] if ACTIVE_DATA['df_cleaned'] is not None else ACTIVE_DATA['df_raw']
+    df = get_active_dataframe()
     if df is None:
         return jsonify({'error': 'No dataset loaded'}), 400
         
     body = request.json or {}
-    chart_type = body.get('type')
+    chart_type = (body.get('type') or '').strip()
     settings = body.get('settings', {})
     filters = body.get('filters', {})
     
     df_filtered = apply_filters(df, filters)
+    num_cols = df_filtered.select_dtypes(include=[np.number]).columns.tolist()
+    cat_cols = df_filtered.select_dtypes(include=['object', 'category']).columns.tolist()
+    all_cols = df_filtered.columns.tolist()
     
+    c_lower = chart_type.lower()
+
+    # NLP visualizations use frequencies and co-occurrences from the selected text,
+    # rather than placeholder values derived from column names.
+    if 'word cloud' in c_lower or 'force' in c_lower:
+        text_columns = NLPProcessor.detect_text_columns(df_filtered)
+        col = settings.get('column')
+        if col not in text_columns:
+            col = text_columns[0] if text_columns else None
+        if not col:
+            return jsonify({'error': 'This visualization needs a text column with usable values'}), 400
+        analysis = NLPProcessor.analyze_text(df_filtered, col)
+        return jsonify({'d3': True, 'type': chart_type, 'column': col,
+                        'wordcloud': analysis.get('wordcloud', []),
+                        'network': analysis.get('network', {'nodes': [], 'links': []})})
+
     try:
         fig = None
-        if chart_type == 'Distribution Plot':
+        if 'distribution' in c_lower or 'histo' in c_lower:
             col = settings.get('column')
             if not col or col not in df_filtered.columns:
-                col = df_filtered.select_dtypes(include=[np.number]).columns.tolist()[0]
-            fig = px.histogram(df_filtered, x=col, title=f"Distribution of {col}", marginal="box")
+                col = num_cols[0] if num_cols else all_cols[0]
+            fig = px.histogram(df_filtered, x=col, title=f"Histogram / Distribution of {col}", marginal="box", template="plotly_dark")
             
-        elif chart_type == 'Categorical Plot':
+        elif 'count' in c_lower or 'categorical' in c_lower:
             col = settings.get('column')
             if not col or col not in df_filtered.columns:
-                col = df_filtered.select_dtypes(include=['object', 'category']).columns.tolist()[0]
+                col = cat_cols[0] if cat_cols else all_cols[0]
             counts = df_filtered[col].value_counts(dropna=False).reset_index().head(25)
             counts.columns = [col, 'count']
-            fig = px.bar(counts, x=col, y='count', title=f"Counts of {col}")
+            fig = px.bar(counts, x=col, y='count', title=f"Frequency Count of {col}", template="plotly_dark", color='count', color_continuous_scale='Viridis')
             
-        elif chart_type == 'Scatter Plot':
+        elif 'pie' in c_lower or 'donut' in c_lower:
+            col = settings.get('column')
+            if not col or col not in df_filtered.columns:
+                col = cat_cols[0] if cat_cols else all_cols[0]
+            counts = df_filtered[col].value_counts(dropna=False).reset_index().head(15)
+            counts.columns = [col, 'count']
+            fig = px.pie(counts, names=col, values='count', hole=0.4, title=f"Excel Donut Breakdown of {col}", template="plotly_dark")
+            
+        elif 'line' in c_lower:
+            x_col = settings.get('xAxis') or (all_cols[0] if all_cols else '')
+            y_col = settings.get('yAxis') or (num_cols[0] if num_cols else all_cols[0])
+            color_col = settings.get('color', '(none)')
+            kw = {'color': color_col} if color_col != '(none)' and color_col in df_filtered.columns else {}
+            fig = px.line(df_filtered.head(500), x=x_col, y=y_col, title=f"Excel Line Trend: {y_col} vs {x_col}", template="plotly_dark", **kw)
+
+        elif 'area' in c_lower:
+            x_col = settings.get('xAxis') or (all_cols[0] if all_cols else '')
+            y_col = settings.get('yAxis') or (num_cols[0] if num_cols else all_cols[0])
+            color_col = settings.get('color', '(none)')
+            kw = {'color': color_col} if color_col != '(none)' and color_col in df_filtered.columns else {}
+            fig = px.area(df_filtered.head(500), x=x_col, y=y_col, title=f"Excel Area Chart: {y_col} vs {x_col}", template="plotly_dark", **kw)
+
+        elif 'stacked' in c_lower:
+            x_col = settings.get('xAxis') or (cat_cols[0] if cat_cols else all_cols[0])
+            y_col = settings.get('yAxis') or (num_cols[0] if num_cols else all_cols[0])
+            color_col = settings.get('color') or (cat_cols[1] if len(cat_cols) > 1 else '(none)')
+            kw = {'color': color_col} if color_col != '(none)' and color_col in df_filtered.columns else {}
+            fig = px.bar(df_filtered.head(300), x=x_col, y=y_col, title=f"Excel Stacked Bar: {y_col} by {x_col}", barmode="stack", template="plotly_dark", **kw)
+
+        elif 'box' in c_lower:
+            y_col = settings.get('yAxis') or (num_cols[0] if num_cols else all_cols[0])
+            x_col = settings.get('xAxis', '(none)')
+            kw = {'x': x_col} if x_col != '(none)' and x_col in df_filtered.columns else {}
+            fig = px.box(df_filtered, y=y_col, points="outliers", title=f"Excel Box Plot / Outlier Diagnostics ({y_col})", template="plotly_dark", **kw)
+            
+        elif 'scatter' in c_lower:
             x_col = settings.get('xAxis')
             y_col = settings.get('yAxis')
             color_col = settings.get('color', '(none)')
-            
-            num_cols = df_filtered.select_dtypes(include=[np.number]).columns.tolist()
             if not x_col or x_col not in df_filtered.columns:
-                x_col = num_cols[0]
+                x_col = num_cols[0] if num_cols else all_cols[0]
             if not y_col or y_col not in df_filtered.columns:
-                y_col = num_cols[1] if len(num_cols) > 1 else num_cols[0]
+                y_col = num_cols[1] if len(num_cols) > 1 else x_col
                 
             color_kw = {}
             if color_col != '(none)' and color_col in df_filtered.columns:
                 color_kw['color'] = color_col
                 
-            fig = px.scatter(df_filtered, x=x_col, y=y_col, title=f"{y_col} vs. {x_col}", **color_kw)
+            fig = px.scatter(df_filtered, x=x_col, y=y_col, title=f"{y_col} vs. {x_col}", template="plotly_dark", **color_kw)
             
-        elif chart_type == 'Correlation Heatmap':
-            num_cols = df_filtered.select_dtypes(include=[np.number]).columns.tolist()
+        elif 'correlation' in c_lower or 'heatmap' in c_lower:
             if len(num_cols) < 2:
                 return jsonify({'error': 'Correlation heatmap requires at least 2 numerical columns'}), 400
             corr = df_filtered[num_cols].corr(numeric_only=True)
-            fig = px.imshow(corr, text_auto=True, aspect="auto", title="Correlation Matrix")
+            fig = px.imshow(corr, text_auto=True, aspect="auto", title="Correlation Matrix", template="plotly_dark")
             
         else:
-            return jsonify({'error': f"Unknown chart type: {chart_type}"}), 400
+            col = all_cols[0] if all_cols else ''
+            fig = px.bar(df_filtered.head(100), x=col, title=f"Chart for {col}", template="plotly_dark")
             
         fig_dict = json.loads(pio.to_json(fig))
+
+        # Format d3Data payload for frontend D3 chart suite
+        d3_data = []
+        try:
+            if any(k in c_lower for k in ['pie', 'donut', 'count', 'categorical', 'histo', 'distribution', 'bar', 'column']):
+                col = settings.get('column') or (all_cols[0] if all_cols else '')
+                counts = df_filtered[col].value_counts(dropna=False).head(15)
+                d3_data = [{'label': str(k), 'value': int(v)} for k, v in counts.items()]
+            elif 'funnel' in c_lower:
+                col = settings.get('column') or (cat_cols[0] if cat_cols else all_cols[0])
+                counts = df_filtered[col].value_counts().head(10)
+                d3_data = [{'stage': str(k), 'value': int(v)} for k, v in counts.items()]
+            elif 'radar' in c_lower or 'spider' in c_lower:
+                cols_to_use = num_cols[:6] if len(num_cols) >= 3 else all_cols[:6]
+                means = df_filtered[cols_to_use].mean(numeric_only=True)
+                d3_data = [{'label': str(k), 'value': float(v)} for k, v in means.items()]
+            else:
+                x_col = settings.get('xAxis') or (all_cols[0] if all_cols else '')
+                y_col = settings.get('yAxis') or (num_cols[0] if num_cols else all_cols[0])
+                sample = df_filtered[[x_col, y_col]].dropna().head(20)
+                d3_data = [{'label': str(r[x_col]), 'value': float(r[y_col]) if str(r[y_col]).replace('.','',1).replace('-','',1).isdigit() else 10} for _, r in sample.iterrows()]
+        except Exception:
+            d3_data = []
+
+        fig_dict['d3Data'] = d3_data
         return jsonify(fig_dict)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
 
 @app.route('/api/chat-chart', methods=['POST'])
 def api_chat_chart():
     if not GEMINI_AVAILABLE:
         return jsonify({'error': 'google-genai is not installed'}), 500
         
-    df = ACTIVE_DATA['df_cleaned'] if ACTIVE_DATA['df_cleaned'] is not None else ACTIVE_DATA['df_raw']
+    df = get_active_dataframe()
     if df is None:
         return jsonify({'error': 'No dataset loaded'}), 400
         
@@ -368,7 +713,7 @@ def api_agent_chat():
     if not GEMINI_AVAILABLE:
         return jsonify({'error': 'google-genai is not installed'}), 500
         
-    df = ACTIVE_DATA['df_cleaned'] if ACTIVE_DATA['df_cleaned'] is not None else ACTIVE_DATA['df_raw']
+    df = get_active_dataframe()
     if df is None:
         return jsonify({'error': 'No dataset loaded'}), 400
         
@@ -484,7 +829,7 @@ def api_train_ml():
     if not SKLEARN_AVAILABLE:
         return jsonify({'error': 'scikit-learn is not installed'}), 500
         
-    df = ACTIVE_DATA['df_cleaned'] if ACTIVE_DATA['df_cleaned'] is not None else ACTIVE_DATA['df_raw']
+    df = get_active_dataframe()
     if df is None:
         return jsonify({'error': 'No dataset loaded'}), 400
         
@@ -783,7 +1128,7 @@ def api_export_pdf():
     if not REPORTLAB_AVAILABLE:
         return jsonify({'error': 'reportlab is not installed'}), 500
         
-    df = ACTIVE_DATA['df_cleaned'] if ACTIVE_DATA['df_cleaned'] is not None else ACTIVE_DATA['df_raw']
+    df = get_active_dataframe()
     if df is None:
         return jsonify({'error': 'No dataset loaded'}), 400
         
@@ -827,25 +1172,46 @@ def api_export_pdf():
             if chart_type == 'ML Model Training':
                 continue
                 
+            c_lower = chart_type.lower()
             fig = None
-            if chart_type == 'Distribution Plot':
-                col = settings.get('column')
-                if col in df_filtered.columns:
-                    fig = px.histogram(df_filtered, x=col, title=f"Distribution of {col}", marginal="box")
-            elif chart_type == 'Categorical Plot':
-                col = settings.get('column')
-                if col in df_filtered.columns:
+            if 'distribution' in c_lower or 'histo' in c_lower:
+                col = settings.get('column') or (df_filtered.columns[0] if len(df_filtered.columns) > 0 else None)
+                if col and col in df_filtered.columns:
+                    fig = px.histogram(df_filtered, x=col, title=f"Histogram of {col}", marginal="box")
+            elif 'count' in c_lower or 'categorical' in c_lower:
+                col = settings.get('column') or (df_filtered.columns[0] if len(df_filtered.columns) > 0 else None)
+                if col and col in df_filtered.columns:
                     counts = df_filtered[col].value_counts(dropna=False).reset_index().head(25)
                     counts.columns = [col, 'count']
-                    fig = px.bar(counts, x=col, y='count', title=f"Counts of {col}")
-            elif chart_type == 'Scatter Plot':
-                x_col = settings.get('xAxis')
-                y_col = settings.get('yAxis')
+                    fig = px.bar(counts, x=col, y='count', title=f"Frequency Counts of {col}")
+            elif 'pie' in c_lower or 'donut' in c_lower:
+                col = settings.get('column') or (df_filtered.columns[0] if len(df_filtered.columns) > 0 else None)
+                if col and col in df_filtered.columns:
+                    counts = df_filtered[col].value_counts(dropna=False).reset_index().head(15)
+                    counts.columns = [col, 'count']
+                    fig = px.pie(counts, names=col, values='count', hole=0.4, title=f"Donut Breakdown of {col}")
+            elif 'line' in c_lower:
+                x_col = settings.get('xAxis') or df_filtered.columns[0]
+                y_col = settings.get('yAxis') or df_filtered.columns[0]
+                fig = px.line(df_filtered.head(500), x=x_col, y=y_col, title=f"Line Trend: {y_col} vs {x_col}")
+            elif 'area' in c_lower:
+                x_col = settings.get('xAxis') or df_filtered.columns[0]
+                y_col = settings.get('yAxis') or df_filtered.columns[0]
+                fig = px.area(df_filtered.head(500), x=x_col, y=y_col, title=f"Area Trend: {y_col} vs {x_col}")
+            elif 'stacked' in c_lower:
+                x_col = settings.get('xAxis') or df_filtered.columns[0]
+                y_col = settings.get('yAxis') or df_filtered.columns[0]
+                fig = px.bar(df_filtered.head(300), x=x_col, y=y_col, barmode="stack", title=f"Stacked Bar: {y_col} by {x_col}")
+            elif 'box' in c_lower:
+                y_col = settings.get('yAxis') or df_filtered.columns[0]
+                fig = px.box(df_filtered, y=y_col, points="outliers", title=f"Box Plot of {y_col}")
+            elif 'scatter' in c_lower:
+                x_col = settings.get('xAxis') or df_filtered.columns[0]
+                y_col = settings.get('yAxis') or df_filtered.columns[0]
                 color_col = settings.get('color', '(none)')
                 color_kw = {'color': color_col} if color_col != '(none)' and color_col in df_filtered.columns else {}
-                if x_col in df_filtered.columns and y_col in df_filtered.columns:
-                    fig = px.scatter(df_filtered, x=x_col, y=y_col, title=f"{y_col} vs. {x_col}", **color_kw)
-            elif chart_type == 'Correlation Heatmap':
+                fig = px.scatter(df_filtered, x=x_col, y=y_col, title=f"{y_col} vs. {x_col}", **color_kw)
+            elif 'correlation' in c_lower or 'heatmap' in c_lower:
                 num_cols = df_filtered.select_dtypes(include=[np.number]).columns.tolist()
                 if len(num_cols) >= 2:
                     corr = df_filtered[num_cols].corr(numeric_only=True)
@@ -887,7 +1253,7 @@ def api_export_pdf():
 
 @app.route('/api/export-csv', methods=['GET', 'POST'])
 def api_export_csv():
-    df = ACTIVE_DATA['df_cleaned'] if ACTIVE_DATA['df_cleaned'] is not None else ACTIVE_DATA['df_raw']
+    df = get_active_dataframe()
     if df is None:
         return jsonify({'error': 'No dataset loaded'}), 400
         
@@ -923,13 +1289,19 @@ def api_export_csv():
 def start_server(file_path=None, df=None, port=None):
     # Preload data if specified
     if df is not None:
-        ACTIVE_DATA['df_raw'] = df
+        SQLITE_ENGINE.ingest_dataframe(df, filename="active_dataframe")
+        ACTIVE_DATA['df_raw'] = None
         ACTIVE_DATA['filename'] = "active_dataframe"
-        print("[Vizify] Preloaded Pandas DataFrame into server.")
+        print("[Vizify] Preloaded DataFrame into SQLite workspace.")
     elif file_path is not None:
         try:
-            ACTIVE_DATA['df_raw'] = pd.read_csv(file_path)
-            ACTIVE_DATA['filename'] = os.path.basename(file_path)
+            filename = os.path.basename(file_path)
+            if os.path.splitext(filename)[1].lower() == '.csv':
+                SQLITE_ENGINE.ingest_csv(file_path, filename=filename)
+            else:
+                SQLITE_ENGINE.ingest_excel(file_path, filename=filename)
+            ACTIVE_DATA['df_raw'] = None
+            ACTIVE_DATA['filename'] = filename
             print(f"[Vizify] Preloaded {file_path} into server.")
         except Exception as e:
             print(f"[Vizify] Failed to preload dataset: {e}")
